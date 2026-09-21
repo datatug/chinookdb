@@ -7,6 +7,8 @@ import worker from '../src/worker.ts';
 const root = join(fileURLToPath(new URL('.', import.meta.url)), '..');
 const wrangler = JSON.parse(await readFile(join(root, 'wrangler.jsonc'), 'utf8')) as { assets: { run_worker_first: string[] } };
 assert.ok(wrangler.assets.run_worker_first.includes('/data/*'), 'wrangler must route /data/* through the Worker first');
+assert.ok(wrangler.assets.run_worker_first.includes('/ovdb'), 'wrangler must route /ovdb through the Worker first');
+assert.ok(wrangler.assets.run_worker_first.includes('/ovdb/*'), 'wrangler must route /ovdb/* through the Worker first');
 
 const assets = {
   async fetch(request: Request) {
@@ -24,8 +26,16 @@ const assets = {
   },
 };
 
-async function request(path: string, method: string) {
-  return worker.fetch(new Request(`https://chinookdb.com${path}`, { method }), { ASSETS: assets });
+const cacheEntries = new Map<string, Response>();
+const cache = {
+  async match(request: Request) { return cacheEntries.get(request.url)?.clone(); },
+  async put(request: Request, response: Response) { cacheEntries.set(request.url, response.clone()); },
+};
+(globalThis as typeof globalThis & { caches?: { default?: typeof cache } }).caches = { default: cache };
+const ctx = { waitUntil(promise: Promise<unknown>) { void promise; } } as ExecutionContext;
+
+async function request(path: string, method: string, env: Record<string, unknown> = {}) {
+  return worker.fetch(new Request(`https://chinookdb.com${path}`, { method }), { ASSETS: assets, ...env }, ctx);
 }
 
 const json = await request('/data/json/chinook.Artist.json', 'GET');
@@ -64,4 +74,58 @@ const method = await request('/data/json/chinook.Artist.json', 'POST');
 assert.equal(method.status, 405);
 assert.equal(method.headers.get('Access-Control-Allow-Origin'), '*');
 
-console.log('Worker HTTP contract passed: route guard, GET, HEAD, OPTIONS, missing, and method handling');
+const discovery = await request('/ovdb/v1/databases', 'GET');
+assert.equal(discovery.status, 200);
+assert.deepEqual(await discovery.json(), { databases: [{ id: 'chinook', engine: 'static-json', schemaMode: 'strict', collections: ['Album', 'Artist', 'Customer', 'Employee', 'Genre', 'Invoice', 'InvoiceLine', 'MediaType', 'Playlist', 'PlaylistTrack', 'Track'], readOnly: true }] });
+assert.match(discovery.headers.get('Cache-Control') ?? '', /max-age=86400/);
+
+const discoverySlash = await request('/ovdb/', 'GET');
+assert.equal(discoverySlash.status, 200);
+assert.equal((await discoverySlash.json()).databases[0].engine, 'static-json');
+
+const artist = await request('/ovdb/v1/databases/chinook/read?key=Artist%2F1', 'GET');
+assert.equal(artist.status, 200);
+assert.deepEqual(await artist.json(), { key: 'Artist/1', data: { ArtistId: 1, Name: 'AC/DC' } });
+assert.equal(artist.headers.get('Access-Control-Allow-Origin'), '*');
+
+const playlistTrack = await request('/ovdb/v1/databases/chinook/read?key=PlaylistTrack%2F1%2C3402', 'GET');
+assert.equal(playlistTrack.status, 200);
+assert.deepEqual(await playlistTrack.json(), { key: 'PlaylistTrack/1,3402', data: { PlaylistId: 1, TrackId: 3402 } });
+
+const query = encodeURIComponent(JSON.stringify({ collection: 'Artist', where: [{ field: 'Name', op: '==', value: 'AC/DC' }], keysOnly: true }));
+const queried = await request(`/ovdb/v1/databases/chinook/query?q=${query}`, 'GET');
+assert.equal(queried.status, 200);
+assert.deepEqual(await queried.json(), { records: [{ key: 'Artist/1' }] });
+
+const unboundedQuery = encodeURIComponent(JSON.stringify({ collection: 'Track', keysOnly: true }));
+const unbounded = await request(`/ovdb/v1/databases/chinook/query?q=${unboundedQuery}`, 'GET');
+assert.equal(unbounded.status, 200);
+assert.equal((await unbounded.json()).records.length, 3503);
+
+const invalidQuery = await request('/ovdb/v1/databases/chinook/query?q=%7B%22collection%22%3A%22Nope%22%7D', 'GET');
+assert.equal(invalidQuery.status, 400);
+assert.equal((await invalidQuery.json()).error.code, 'bad_request');
+
+const unsupportedQuery = await request('/ovdb/v1/databases/chinook/query?q=%7B%22collection%22%3A%22Artist%22%2C%22offset%22%3A1%7D', 'GET');
+assert.equal(unsupportedQuery.status, 400);
+assert.equal((await unsupportedQuery.json()).error.code, 'bad_request');
+
+const notFound = await request('/ovdb/v1/databases/chinook/read?key=Artist%2F999999', 'GET');
+assert.equal(notFound.status, 404);
+assert.equal((await notFound.json()).error.code, 'not_found');
+assert.equal(notFound.headers.get('Cache-Control'), 'no-store');
+
+const readonly = await request('/ovdb/v1/databases/chinook/read?key=Artist%2F1', 'POST');
+assert.equal(readonly.status, 403);
+assert.equal((await readonly.json()).error.code, 'read_only');
+
+const customTtl = await request('/ovdb/v1/databases/chinook?ttl-test=1', 'GET', { OVDB_CACHE_TTL_SECONDS: '60' });
+assert.match(customTtl.headers.get('Cache-Control') ?? '', /max-age=60/);
+
+const disabledPath = '/ovdb/v1/databases/chinook?ttl-test=0';
+cacheEntries.set(`https://chinookdb.com${disabledPath}`, new Response(JSON.stringify({ stale: true }), { headers: { 'Cache-Control': 'public, max-age=86400' } }));
+const disabledCache = await request(disabledPath, 'GET', { OVDB_CACHE_TTL_SECONDS: '0' });
+assert.equal(disabledCache.headers.get('Cache-Control'), 'no-store');
+assert.equal((await disabledCache.json()).id, 'chinook');
+
+console.log('Worker HTTP contract passed: static assets, OVDB discovery/read/query, read-only policy, CORS, and cache headers');

@@ -49,6 +49,40 @@ Data responses are served by the Worker with explicit content types, public
 cache headers, and permissive read-only CORS. Missing `/data/` files return a
 JSON 404 rather than the HTML site fallback.
 
+## Read-only OVDB endpoint
+
+`https://chinookdb.com/ovdb/` exposes the fixture through a public,
+server-wide read-only OVDB-compatible API. Every mutation attempt is rejected
+with `403 {"error":{"code":"read_only"}}`; no credentials are accepted or
+needed. Successful public GET responses have `Cache-Control: public` and are
+stored in the Worker Cache API using the complete URL as the edge-cache key.
+Set the non-secret Worker variable `OVDB_CACHE_TTL_SECONDS` to change the TTL;
+it defaults to 86,400 seconds (one day).
+
+Discovery reports `engine: "static-json"`: the Worker reads generated public
+JSON assets, not a live SQLite engine. It reports `schemaMode: "strict"` and
+lists every fixed Chinook table in `collections`.
+
+```text
+GET /ovdb/v1/databases
+GET /ovdb/v1/databases/chinook/read?key=Artist%2F1
+GET /ovdb/v1/databases/chinook/read?key=PlaylistTrack%2F1%2C3402
+GET /ovdb/v1/databases/chinook/query?q=%7B%22collection%22%3A%22Track%22%2C%22where%22%3A%5B%7B%22field%22%3A%22GenreId%22%2C%22op%22%3A%22%3D%3D%22%2C%22value%22%3A1%7D%5D%2C%22limit%22%3A3%7D
+```
+
+The read response is `{"key":"Artist/1","data":{...}}`. Query responses
+are `{"records":[{"key":"Track/1","data":{...}}]}`; use
+`"keysOnly":true` to omit `data`. Queries accept the OVDB core query fields
+`collection`, `where`, `orderBy`, `limit`, and `keysOnly`. This is a bounded
+Chinook query subset: unsupported fields (including pagination offsets) are
+rejected rather than ignored, and `parent` is rejected because Chinook tables
+are flat. Filters are AND-ed and support `==`, `<`, `<=`, `>`, `>=`, `in`,
+`array-contains`, and `array-contains-any`. Inputs are bounded to 64 KiB and
+`limit: 0` (or an omitted limit) preserves OVDB's unbounded-query meaning for
+the fixed fixture. A result over 10,000 records is explicitly rejected instead
+of being truncated. Set the TTL to `0` to disable cache storage and return
+`Cache-Control: no-store`.
+
 ## Attribution and licence
 
 Chinook Database is Copyright (c) 2008–2024 Luis Rocha and is distributed under
