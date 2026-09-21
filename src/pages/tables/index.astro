@@ -9,10 +9,14 @@ const relationships = tables.flatMap((table) => table.foreignKeys.map((foreignKe
   to: foreignKey.table,
   referencedColumn: foreignKey.referencedColumn,
 })));
+const connectedTableCount = (tableName: string) => new Set([
+  ...tables.find((table) => table.name === tableName)!.foreignKeys.map((foreignKey) => foreignKey.table),
+  ...tables.filter((table) => table.foreignKeys.some((foreignKey) => foreignKey.table === tableName)).map((table) => table.name),
+]).size;
 ---
 <BaseLayout title="Tables — Chinook Database | ChinookDB" description="Browse all Chinook Database tables, columns, relationships, row counts, and downloadable data.">
   <section class="page-intro shell"><p class="eyebrow">Chinook schema</p><h1>Tables</h1><p>Explore the complete relational shape of the Chinook sample database. Every table has a schema reference, preview, relationships, and direct data downloads.</p></section>
-  <section class="shell section"><div class="table-grid">{tables.map((table) => <TableCard table={table} />)}</div><div class="relationship-section"><div class="section-heading compact"><div><p class="eyebrow">Relationship map</p><h2>How the tables connect.</h2></div><span class="muted">{relationships.length} foreign keys</span></div><div class="relationship-list">{relationships.map((relationship) => <div class="relationship-row"><a class="relationship-table" href={tablePath(relationship.from)}>{relationship.from}</a><code>{relationship.column}</code><span class="relationship-arrow" aria-hidden="true">→</span><a class="relationship-table" href={tablePath(relationship.to)}>{relationship.to}</a><code>{relationship.referencedColumn}</code></div>)}</div></div></section>
+  <section class="shell section"><div class="table-grid">{tables.map((table) => <TableCard table={table} connectedTableCount={connectedTableCount(table.name)} />)}</div><div class="relationship-section"><div class="section-heading compact"><div><p class="eyebrow">Relationship map</p><h2>How the tables connect.</h2></div><span class="muted">{relationships.length} foreign keys</span></div><div class="relationship-list">{relationships.map((relationship) => <div class="relationship-row"><a class="relationship-table" href={tablePath(relationship.from)}>{relationship.from}</a><code>{relationship.column}</code><span class="relationship-arrow" aria-hidden="true">→</span><a class="relationship-table" href={tablePath(relationship.to)}>{relationship.to}</a><code>{relationship.referencedColumn}</code></div>)}</div></div></section>
 </BaseLayout>
 <style>
   .relationship-section { border-top: 1px solid var(--line); margin-top: 74px; padding-top: 64px; }
@@ -22,6 +26,7 @@ const relationships = tables.flatMap((table) => table.foreignKeys.map((foreignKe
   .relationship-row:hover { background: rgba(114, 213, 209, .06); }
   .relationship-table { font-weight: 700; color: var(--ink); }
   .relationship-table:hover { color: var(--lime); }
+  .relationship-section h2 { white-space: nowrap; }
   .relationship-row code { font-size: 10px; color: var(--cyan); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .relationship-arrow { color: var(--lime); text-align: center; }
   @media (max-width: 800px) { .relationship-list { grid-template-columns: 1fr; } .relationship-row:nth-child(odd) { border-right: 0; } }

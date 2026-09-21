@@ -1,11 +1,11 @@
 ---
 import type { TableMeta } from '../data/model';
 import { tablePath } from '../data/model';
-const { table } = Astro.props as { table: TableMeta };
+const { table, connectedTableCount } = Astro.props as { table: TableMeta; connectedTableCount: number };
 ---
 <a class="table-card" href={tablePath(table.name)}>
-  <span class="table-card-top"><span class="table-icon">{table.name.slice(0, 1)}</span><span class="row-count">{table.rowCount.toLocaleString()} rows</span></span>
+  <span class="table-card-top"><span class="table-icon">{table.name.slice(0, 1)}</span></span>
   <strong>{table.name}</strong>
   <span class="table-card-description">{table.description}</span>
-  <span class="table-card-columns">{table.columns.length} columns <span aria-hidden="true">→</span></span>
+  <span class="table-card-columns">{table.columns.length} columns; {table.foreignKeys.length} {table.foreignKeys.length === 1 ? 'FK' : 'FKs'}; {connectedTableCount} connected {connectedTableCount === 1 ? 'table' : 'tables'}; {table.rowCount.toLocaleString()} records <span aria-hidden="true">→</span></span>
 </a>
