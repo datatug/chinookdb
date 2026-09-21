@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "chinookdb",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-09-21",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "404-page"
+  },
+  "routes": [
+    { "pattern": "chinookdb.com", "custom_domain": true }
+  ]
+}

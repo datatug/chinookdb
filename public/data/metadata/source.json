@@ -1,0 +1,5 @@
+{
+  "repository": "https://github.com/lerocha/chinook-database",
+  "revision": "7f67772503d71ba90f19283c38e93923addb43fa",
+  "sqlitePath": "data-source/Chinook_Sqlite.sqlite"
+}

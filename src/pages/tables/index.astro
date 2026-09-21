@@ -1,0 +1,9 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import TableCard from '../../components/TableCard.astro';
+import { tables } from '../../data/model';
+---
+<BaseLayout title="Tables — Chinook Database | ChinookDB" description="Browse all Chinook Database tables, columns, relationships, row counts, and downloadable data.">
+  <section class="page-intro shell"><p class="eyebrow">Chinook schema</p><h1>Tables</h1><p>Explore the complete relational shape of the Chinook sample database. Every table has a schema reference, preview, relationships, and direct data downloads.</p></section>
+  <section class="shell section"><div class="table-grid">{tables.map((table) => <TableCard table={table} />)}</div></section>
+</BaseLayout>

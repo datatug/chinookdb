@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://chinookdb.com/</loc></url>
+  <url><loc>https://chinookdb.com/tables/</loc></url>
+  <url><loc>https://chinookdb.com/downloads/</loc></url>
+  <url><loc>https://chinookdb.com/about/</loc></url>
+  <url><loc>https://chinookdb.com/tables/Artist/</loc></url>
+  <url><loc>https://chinookdb.com/tables/Album/</loc></url>
+  <url><loc>https://chinookdb.com/tables/Track/</loc></url>
+  <url><loc>https://chinookdb.com/tables/Genre/</loc></url>
+  <url><loc>https://chinookdb.com/tables/MediaType/</loc></url>
+  <url><loc>https://chinookdb.com/tables/Playlist/</loc></url>
+  <url><loc>https://chinookdb.com/tables/PlaylistTrack/</loc></url>
+  <url><loc>https://chinookdb.com/tables/Customer/</loc></url>
+  <url><loc>https://chinookdb.com/tables/Employee/</loc></url>
+  <url><loc>https://chinookdb.com/tables/Invoice/</loc></url>
+  <url><loc>https://chinookdb.com/tables/InvoiceLine/</loc></url>
+</urlset>

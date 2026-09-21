@@ -1,0 +1,27 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import TableCard from '../components/TableCard.astro';
+import { tables } from '../data/model';
+
+const totalRows = tables.reduce((sum, table) => sum + table.rowCount, 0);
+---
+<BaseLayout title="ChinookDB — The Chinook sample database, live" description="Download and explore the Chinook Database: SQLite, JSON, YAML, SQL, CSV, schema and table documentation.">
+  <section class="hero shell">
+    <div class="hero-copy">
+      <p class="eyebrow"><span class="eyebrow-dot"></span>Open sample data for developers</p>
+      <h1>The Chinook<br /><em>sample database, live.</em></h1>
+      <p class="hero-lede">A stable, readable home for Chinook Database downloads, schema documentation, and table-level data previews.</p>
+      <div class="hero-actions"><a class="button button-primary" href="/downloads/">Download the database <span aria-hidden="true">↓</span></a><a class="button button-quiet" href="/tables/">Browse tables <span aria-hidden="true">→</span></a></div>
+    </div>
+    <div class="hero-console" aria-label="Chinook database summary">
+      <div class="console-bar"><span></span><span></span><span></span><code>chinook.sqlite</code></div>
+      <div class="console-content"><p class="console-comment">-- a small database with real shape</p><p><span class="syntax-key">SELECT</span> <span class="syntax-name">table_name</span>, <span class="syntax-name">row_count</span></p><p><span class="syntax-key">FROM</span> <span class="syntax-name">chinook_schema</span></p><p><span class="syntax-key">ORDER BY</span> row_count <span class="syntax-key">DESC</span>;</p><div class="console-rule"></div><p class="console-result"><span>{tables.length}</span> tables <span>·</span> {totalRows.toLocaleString()} rows</p><p class="console-comment">-- ready for your next query</p></div>
+    </div>
+  </section>
+  <section class="shell section intro-grid">
+    <div><p class="eyebrow">Why Chinook</p><h2>A dependable fixture for database work.</h2></div>
+    <div class="intro-copy"><p>Chinook models a digital music store: artists, albums, tracks, customers, invoices, and the relationships between them. It is useful for learning SQL, testing database libraries, demonstrating joins, and building data tools.</p><p>These are the canonical upstream records, packaged in formats that are easy to inspect, download, and reuse.</p></div>
+  </section>
+  <section class="shell section table-section"><div class="section-heading"><div><p class="eyebrow">The schema</p><h2>Eleven tables. One useful shape.</h2></div><a class="text-link" href="/tables/">View all tables <span aria-hidden="true">→</span></a></div><div class="table-grid">{tables.map((table) => <TableCard table={table} />)}</div></section>
+  <section class="shell section format-section"><div class="format-panel"><div><p class="eyebrow">Built for your workflow</p><h2>Download once.<br /><em>Use it anywhere.</em></h2><p>SQLite for a local database. JSON, YAML, and CSV for tooling. SQL scripts when you need to load another engine.</p></div><div class="format-list"><a href="/data/chinook.sqlite"><span class="format-label">SQLite</span><span>Complete database <b>↓</b></span></a><a href="/data/chinook.json"><span class="format-label">JSON</span><span>Complete database <b>↓</b></span></a><a href="/data/chinook.yaml"><span class="format-label">YAML</span><span>Complete database <b>↓</b></span></a><a href="/downloads/"><span class="format-label">SQL + CSV</span><span>More formats <b>→</b></span></a></div></div></section>
+</BaseLayout>
