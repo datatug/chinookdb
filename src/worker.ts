@@ -4,8 +4,8 @@ interface Env {
 
 const contentTypes: Record<string, string> = {
   '.sqlite': 'application/vnd.sqlite3',
-  // Upstream SQL distributions preserve their native encoding (including the
-  // SQL Server UTF-16 script), so do not assert a charset here.
+  // Upstream SQL distributions can use dialect-specific encodings, so do not
+  // assert a charset here.
   '.sql': 'application/sql',
   '.yaml': 'application/yaml; charset=utf-8',
   '.yml': 'application/yaml; charset=utf-8',
