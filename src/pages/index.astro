@@ -15,7 +15,7 @@ const totalRows = tables.reduce((sum, table) => sum + table.rowCount, 0);
     </div>
     <div class="hero-console" aria-label="Chinook database summary">
       <div class="console-bar"><span></span><span></span><span></span><code>chinook.sqlite</code></div>
-      <div class="console-content"><p class="console-comment">-- a small database with real shape</p><p><span class="syntax-key">SELECT</span> <span class="syntax-name">table_name</span>, <span class="syntax-name">row_count</span></p><p><span class="syntax-key">FROM</span> <span class="syntax-name">chinook_schema</span></p><p><span class="syntax-key">ORDER BY</span> row_count <span class="syntax-key">DESC</span>;</p><div class="console-rule"></div><p class="console-result"><span>{tables.length}</span> tables <span>·</span> {totalRows.toLocaleString()} rows</p><p class="console-comment">-- ready for your next query</p></div>
+      <div class="console-content"><p class="console-comment">-- a small database with real shape</p><p><span class="syntax-key">SELECT</span> <span class="syntax-name">Name</span></p><p><span class="syntax-key">FROM</span> <span class="syntax-name">Artist</span> <span class="syntax-key">LIMIT</span> 5;</p><div class="console-rule"></div><p class="console-result">AC/DC <span>·</span> Accept <span>·</span> Aerosmith</p><p class="console-result">Alanis Morissette <span>·</span> Alice In Chains</p><p class="console-comment">-- {tables.length} tables · {totalRows.toLocaleString()} rows, ready for your next query</p></div>
     </div>
   </section>
   <section class="shell section intro-grid">
