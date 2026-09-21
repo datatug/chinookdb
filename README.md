@@ -59,6 +59,10 @@ stored in the Worker Cache API using the complete URL as the edge-cache key.
 Set the non-secret Worker variable `OVDB_CACHE_TTL_SECONDS` to change the TTL;
 it defaults to 86,400 seconds (one day).
 
+Discovery reports `engine: "static-json"`: the Worker reads generated public
+JSON assets, not a live SQLite engine. It reports `schemaMode: "strict"` and
+lists every fixed Chinook table in `collections`.
+
 ```text
 GET /ovdb/v1/databases
 GET /ovdb/v1/databases/chinook/read?key=Artist%2F1
@@ -74,8 +78,10 @@ Chinook query subset: unsupported fields (including pagination offsets) are
 rejected rather than ignored, and `parent` is rejected because Chinook tables
 are flat. Filters are AND-ed and support `==`, `<`, `<=`, `>`, `>=`, `in`,
 `array-contains`, and `array-contains-any`. Inputs are bounded to 64 KiB and
-1,000 records per response. Set the TTL to `0` to disable cache storage and
-return `Cache-Control: no-store`.
+`limit: 0` (or an omitted limit) preserves OVDB's unbounded-query meaning for
+the fixed fixture. A result over 10,000 records is explicitly rejected instead
+of being truncated. Set the TTL to `0` to disable cache storage and return
+`Cache-Control: no-store`.
 
 ## Attribution and licence
 

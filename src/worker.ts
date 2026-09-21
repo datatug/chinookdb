@@ -13,7 +13,8 @@ const tableKeys: Record<string, readonly string[]> = {
 const tableFields: Record<string, ReadonlySet<string>> = {
   Album: new Set(['AlbumId', 'Title', 'ArtistId']), Artist: new Set(['ArtistId', 'Name']), Customer: new Set(['CustomerId', 'FirstName', 'LastName', 'Company', 'Address', 'City', 'State', 'Country', 'PostalCode', 'Phone', 'Fax', 'Email', 'SupportRepId']), Employee: new Set(['EmployeeId', 'LastName', 'FirstName', 'Title', 'ReportsTo', 'BirthDate', 'HireDate', 'Address', 'City', 'State', 'Country', 'PostalCode', 'Phone', 'Fax', 'Email']), Genre: new Set(['GenreId', 'Name']), MediaType: new Set(['MediaTypeId', 'Name']), Playlist: new Set(['PlaylistId', 'Name']), PlaylistTrack: new Set(['PlaylistId', 'TrackId']), Invoice: new Set(['InvoiceId', 'CustomerId', 'InvoiceDate', 'BillingAddress', 'BillingCity', 'BillingState', 'BillingCountry', 'BillingPostalCode', 'Total']), InvoiceLine: new Set(['InvoiceLineId', 'InvoiceId', 'TrackId', 'UnitPrice', 'Quantity']), Track: new Set(['TrackId', 'Name', 'AlbumId', 'MediaTypeId', 'GenreId', 'Composer', 'Milliseconds', 'Bytes', 'UnitPrice']),
 };
-const maxQueryBytes = 64 * 1024, maxResults = 1000;
+const maxQueryBytes = 64 * 1024, maxResults = 10_000;
+const databaseMetadata = { id: 'chinook', engine: 'static-json', schemaMode: 'strict', collections: Object.keys(tableKeys), readOnly: true };
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -38,10 +39,10 @@ async function handleOvdb(request: Request, env: Env, ctx: ExecutionContext, url
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)) return error(403, 'read_only', 'chinook is read-only');
   if (!['GET', 'HEAD'].includes(request.method)) return error(405, 'bad_request', `method not allowed: ${request.method}`);
   if (request.method === 'GET') {
-    const cache = edgeCache(), cached = cache ? await cache.match(request) : undefined;
+    const ttl = cacheTtl(env), cache = ttl > 0 ? edgeCache() : undefined, cached = cache ? await cache.match(request) : undefined;
     if (cached) return cached;
     const response = await ovdbGet(request, env, url);
-    if (response.ok && cache && cacheTtl(env) > 0) ctx.waitUntil(cache.put(request, response.clone()));
+    if (response.ok && cache) ctx.waitUntil(cache.put(request, response.clone()));
     return response;
   }
   const response = await ovdbGet(request, env, url); return new Response(null, { status: response.status, headers: response.headers });
@@ -49,8 +50,8 @@ async function handleOvdb(request: Request, env: Env, ctx: ExecutionContext, url
 
 async function ovdbGet(request: Request, env: Env, url: URL): Promise<Response> {
   const path = url.pathname;
-  if (path === '/ovdb' || path === '/ovdb/v1' || path === '/ovdb/v1/databases') return json({ databases: [{ id: 'chinook', readOnly: true }] }, env);
-  if (path === '/ovdb/v1/databases/chinook') return json({ id: 'chinook', readOnly: true }, env);
+  if (path === '/ovdb' || path === '/ovdb/' || path === '/ovdb/v1' || path === '/ovdb/v1/databases') return json({ databases: [databaseMetadata] }, env);
+  if (path === '/ovdb/v1/databases/chinook') return json(databaseMetadata, env);
   if (path === '/ovdb/v1/databases/chinook/read') return readRecord(request, env, url);
   if (path === '/ovdb/v1/databases/chinook/query') return queryRecords(request, env, url);
   return error(404, 'not_found', 'OVDB endpoint not found');
@@ -74,7 +75,8 @@ async function queryRecords(request: Request, env: Env, url: URL): Promise<Respo
   let results = rows.filter((row) => matches(row, valid.query.where ?? []));
   if (valid.query.orderBy?.length) results = [...results].sort((a, b) => compareRows(a, b, valid.query.orderBy!));
   else if (valid.query.keysOnly) results = [...results].sort((a, b) => recordId(valid.query.collection, a).localeCompare(recordId(valid.query.collection, b)));
-  results = results.slice(0, valid.query.limit || maxResults);
+  if (valid.query.limit && valid.query.limit > 0) results = results.slice(0, valid.query.limit);
+  if (results.length > maxResults) return error(400, 'bad_request', `query result exceeds ${maxResults} records; add a limit or a more selective filter`);
   return json({ records: results.map((row) => valid.query.keysOnly ? { key: `${valid.query.collection}/${recordId(valid.query.collection, row)}` } : { key: `${valid.query.collection}/${recordId(valid.query.collection, row)}`, data: row }) }, env);
 }
 
