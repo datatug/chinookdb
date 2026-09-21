@@ -22,7 +22,7 @@ export default {
     if (request.method !== 'GET' && request.method !== 'HEAD') return new Response('Method Not Allowed', { status: 405, headers: corsHeaders() });
 
     const asset = await env.ASSETS.fetch(request);
-    if (asset.status === 404) return new Response(JSON.stringify({ error: 'Not found' }), { status: 404, headers: { ...corsHeaders(), 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
+    if (asset.status === 404) return new Response(request.method === 'HEAD' ? null : JSON.stringify({ error: 'Not found' }), { status: 404, headers: { ...corsHeaders(), 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
     const headers = new Headers(asset.headers);
     headers.set('Access-Control-Allow-Origin', '*');
     headers.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');

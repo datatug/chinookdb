@@ -9,7 +9,8 @@
     "build": "pnpm generate && astro build",
     "preview": "astro preview",
     "check": "astro check",
-    "validate": "node scripts/validate-data.mjs"
+    "validate": "node scripts/validate-data.mjs",
+    "test:worker": "node --import tsx/esm scripts/test-worker.ts"
   },
   "dependencies": {
     "astro": "^5.14.1",
@@ -18,6 +19,7 @@
   "devDependencies": {
     "@astrojs/check": "^0.9.4",
     "@types/node": "^22.15.0",
+    "tsx": "^4.19.2",
     "typescript": "^5.9.2",
     "wrangler": "^4.38.0"
   }
