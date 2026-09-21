@@ -2,8 +2,9 @@
 -- Generated from https://github.com/lerocha/chinook-database@7f67772503d71ba90f19283c38e93923addb43fa
 
 CREATE TABLE [PlaylistTrack] (
-  [PlaylistId] INTEGER NOT NULL PRIMARY KEY,
-  [TrackId] INTEGER NOT NULL PRIMARY KEY
+  [PlaylistId] INTEGER NOT NULL,
+  [TrackId] INTEGER NOT NULL,
+  PRIMARY KEY ([PlaylistId], [TrackId])
 );
 
 INSERT INTO [PlaylistTrack] ([PlaylistId], [TrackId]) VALUES (1, 3402);

@@ -76,9 +76,11 @@ for (const table of tables) {
   const header = table.columns.map((column) => csvCell(column.name)).join(',');
   const body = rows.map((row) => table.columns.map((column) => csvCell(row[column.name])).join(',')).join('\n');
   await writeFile(join(out, 'csv', `chinook.${table.name}.csv`), `${header}\n${body}\n`);
-  const columnSql = table.columns.map((column) => `  ${quoteIdentifier(column.name)} ${column.type}${column.nullable ? '' : ' NOT NULL'}${column.primaryKey ? ' PRIMARY KEY' : ''}`).join(',\n');
+  const primaryKeys = table.columns.filter((column) => column.primaryKey);
+  const columnSql = table.columns.map((column) => `  ${quoteIdentifier(column.name)} ${column.type}${column.nullable ? '' : ' NOT NULL'}${column.primaryKey && primaryKeys.length === 1 ? ' PRIMARY KEY' : ''}`).join(',\n');
+  const compositeKey = primaryKeys.length > 1 ? `,\n  PRIMARY KEY (${primaryKeys.map((column) => quoteIdentifier(column.name)).join(', ')})` : '';
   const inserts = rows.map((row) => `INSERT INTO ${quoteIdentifier(table.name)} (${table.columns.map((column) => quoteIdentifier(column.name)).join(', ')}) VALUES (${table.columns.map((column) => sqlLiteral(row[column.name])).join(', ')});`).join('\n');
-  const sql = `-- Chinook ${table.name} table\n-- Generated from ${sourceRepository}@${sourceRevision}\n\nCREATE TABLE ${quoteIdentifier(table.name)} (\n${columnSql}\n);\n\n${inserts}\n`;
+  const sql = `-- Chinook ${table.name} table\n-- Generated from ${sourceRepository}@${sourceRevision}\n\nCREATE TABLE ${quoteIdentifier(table.name)} (\n${columnSql}${compositeKey}\n);\n\n${inserts}\n`;
   await writeFile(join(out, 'sql', `chinook.${table.name}.sql`), sql);
 }
 

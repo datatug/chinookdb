@@ -18,6 +18,11 @@ for (const table of model.tables) {
   if (json.length !== table.rowCount || yaml.length !== table.rowCount || Number(sqliteCount) !== table.rowCount) throw new Error(`${table.name} row count mismatch`);
   const csv = await readFile(join(out, 'csv', `chinook.${table.name}.csv`), 'utf8');
   if (csv.split('\n')[0].split(',').length !== table.columns.length) throw new Error(`${table.name} CSV header mismatch`);
+  const tableDb = new DatabaseSync(':memory:');
+  tableDb.exec(await readFile(join(out, 'sql', `chinook.${table.name}.sql`), 'utf8'));
+  const importedCount = tableDb.prepare(`SELECT count(*) AS count FROM [${table.name}]`).get().count;
+  if (Number(importedCount) !== table.rowCount) throw new Error(`${table.name} SQL import row count mismatch`);
+  tableDb.close();
 }
 const artist = db.prepare('SELECT Name FROM Artist WHERE ArtistId = 1').get();
 if (!artist || artist.Name !== 'AC/DC') throw new Error('SQLite query validation failed');
