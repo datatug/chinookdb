@@ -1,0 +1,29 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import TableCard from '../../components/TableCard.astro';
+import { tables, tablePath } from '../../data/model';
+
+const relationships = tables.flatMap((table) => table.foreignKeys.map((foreignKey) => ({
+  from: table.name,
+  column: foreignKey.column,
+  to: foreignKey.table,
+  referencedColumn: foreignKey.referencedColumn,
+})));
+---
+<BaseLayout title="Tables — Chinook Database | ChinookDB" description="Browse all Chinook Database tables, columns, relationships, row counts, and downloadable data.">
+  <section class="page-intro shell"><p class="eyebrow">Chinook schema</p><h1>Tables</h1><p>Explore the complete relational shape of the Chinook sample database. Every table has a schema reference, preview, relationships, and direct data downloads.</p></section>
+  <section class="shell section"><div class="table-grid">{tables.map((table) => <TableCard table={table} />)}</div><div class="relationship-section"><div class="section-heading compact"><div><p class="eyebrow">Relationship map</p><h2>How the tables connect.</h2></div><span class="muted">{relationships.length} foreign keys</span></div><div class="relationship-list">{relationships.map((relationship) => <div class="relationship-row"><a class="relationship-table" href={tablePath(relationship.from)}>{relationship.from}</a><code>{relationship.column}</code><span class="relationship-arrow" aria-hidden="true">→</span><a class="relationship-table" href={tablePath(relationship.to)}>{relationship.to}</a><code>{relationship.referencedColumn}</code></div>)}</div></div></section>
+</BaseLayout>
+<style>
+  .relationship-section { border-top: 1px solid var(--line); margin-top: 74px; padding-top: 64px; }
+  .relationship-list { border-top: 1px solid var(--line); display: grid; grid-template-columns: 1fr 1fr; }
+  .relationship-row { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(100px, 1.3fr) 24px minmax(100px, 1fr) minmax(100px, 1.3fr); align-items: center; gap: 10px; padding: 13px 12px; border-bottom: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+  .relationship-row:nth-child(odd) { border-right: 1px solid var(--line); }
+  .relationship-row:hover { background: rgba(114, 213, 209, .06); }
+  .relationship-table { font-weight: 700; color: var(--ink); }
+  .relationship-table:hover { color: var(--lime); }
+  .relationship-row code { font-size: 10px; color: var(--cyan); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .relationship-arrow { color: var(--lime); text-align: center; }
+  @media (max-width: 800px) { .relationship-list { grid-template-columns: 1fr; } .relationship-row:nth-child(odd) { border-right: 0; } }
+  @media (max-width: 540px) { .relationship-row { grid-template-columns: 1fr 1fr 20px 1fr 1fr; gap: 6px; padding-inline: 0; font-size: 12px; } }
+</style>
