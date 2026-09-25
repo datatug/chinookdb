@@ -9,11 +9,12 @@ const wrangler = JSON.parse(await readFile(join(root, 'wrangler.jsonc'), 'utf8')
 assert.ok(wrangler.assets.run_worker_first.includes('/data/*'), 'wrangler must route /data/* through the Worker first');
 assert.ok(wrangler.assets.run_worker_first.includes('/ovdb'), 'wrangler must route /ovdb through the Worker first');
 assert.ok(wrangler.assets.run_worker_first.includes('/ovdb/*'), 'wrangler must route /ovdb/* through the Worker first');
+assert.ok(wrangler.assets.run_worker_first.includes('/.well-known/openvaultdb'), 'wrangler must route discovery through the Worker first');
 
 const assets = {
   async fetch(request: Request) {
     const url = new URL(request.url);
-    const filePath = join(root, 'dist', url.pathname);
+    const filePath = join(root, 'dist', url.pathname, url.pathname.endsWith('/') ? 'index.html' : '');
     try {
       const body = await readFile(filePath);
       return new Response(request.method === 'HEAD' ? null : body, {
@@ -79,9 +80,40 @@ assert.equal(discovery.status, 200);
 assert.deepEqual(await discovery.json(), { databases: [{ id: 'chinook', engine: 'static-json', schemaMode: 'strict', collections: ['Album', 'Artist', 'Customer', 'Employee', 'Genre', 'Invoice', 'InvoiceLine', 'MediaType', 'Playlist', 'PlaylistTrack', 'Track'], readOnly: true }] });
 assert.match(discovery.headers.get('Cache-Control') ?? '', /max-age=86400/);
 
-const discoverySlash = await request('/ovdb/', 'GET');
-assert.equal(discoverySlash.status, 200);
-assert.equal((await discoverySlash.json()).databases[0].engine, 'static-json');
+const wellKnown = await request('/.well-known/openvaultdb', 'GET');
+assert.equal(wellKnown.status, 200);
+assert.equal(wellKnown.headers.get('Access-Control-Allow-Origin'), '*');
+assert.deepEqual(await wellKnown.json(), {
+  name: 'ChinookDB OpenVaultDB', protocol: 'openvaultdb/0.1', version: '1.0.0', authEnabled: false,
+  databases: [{ id: 'chinook', url: 'https://chinookdb.com/ovdb/dbs/chinook', apiUrl: 'https://chinookdb.com/ovdb/v1/databases/chinook', capabilities: { read: true, query: true, write: false } }],
+});
+
+for (const [path, heading, link] of [
+  ['/ovdb/', 'Chinook over OVDB', '/ovdb/dbs/'],
+  ['/ovdb/dbs/', 'Databases', '/ovdb/dbs/chinook'],
+  ['/ovdb/dbs/chinook', 'Chinook', '/tables/Album/'],
+] as const) {
+  const page = await request(path, 'GET');
+  assert.equal(page.status, 200, path);
+  assert.equal(page.headers.get('Content-Type'), 'text/html; charset=utf-8');
+  assert.match(page.headers.get('Link') ?? '', /rel="describedby"/);
+  assert.match(page.headers.get('Link') ?? '', /rel="canonical"/);
+  const html = await page.text();
+  assert.match(html, new RegExp(`<h1[^>]*>${heading}</h1>`));
+  assert.ok(html.includes(`href="${link}"`), `${path} must link to ${link}`);
+  assert.ok(!html.includes('<script'), `${path} must work without JavaScript`);
+  const headPage = await request(path, 'HEAD');
+  assert.equal(headPage.status, 200);
+  assert.equal(await headPage.text(), '');
+}
+
+const unknownDb = await request('/ovdb/dbs/not-real', 'GET');
+assert.equal(unknownDb.status, 404);
+assert.equal(unknownDb.headers.get('Content-Type'), 'text/html; charset=utf-8');
+assert.match(await unknownDb.text(), /Browse available databases/);
+const maliciousDb = await request('/ovdb/dbs/%3Cscript%3E', 'GET');
+assert.equal(maliciousDb.status, 404);
+assert.ok(!(await maliciousDb.text()).includes('<script>'));
 
 const artist = await request('/ovdb/v1/databases/chinook/read?key=Artist%2F1', 'GET');
 assert.equal(artist.status, 200);

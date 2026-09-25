@@ -15,11 +15,13 @@ const tableFields: Record<string, ReadonlySet<string>> = {
 };
 const maxQueryBytes = 64 * 1024, maxResults = 10_000;
 const databaseMetadata = { id: 'chinook', engine: 'static-json', schemaMode: 'strict', collections: Object.keys(tableKeys), readOnly: true };
+const canonicalDatabaseUrl = 'https://chinookdb.com/ovdb/dbs/chinook';
+const discoveryUrl = 'https://chinookdb.com/.well-known/openvaultdb';
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
-    return url.pathname === '/ovdb' || url.pathname.startsWith('/ovdb/') ? handleOvdb(request, env, ctx, url) : handleData(request, env, url);
+    return url.pathname === '/.well-known/openvaultdb' || url.pathname === '/ovdb' || url.pathname.startsWith('/ovdb/') ? handleOvdb(request, env, ctx, url) : handleData(request, env, url);
   },
 } satisfies ExportedHandler<Env>;
 
@@ -50,11 +52,36 @@ async function handleOvdb(request: Request, env: Env, ctx: ExecutionContext, url
 
 async function ovdbGet(request: Request, env: Env, url: URL): Promise<Response> {
   const path = url.pathname;
-  if (path === '/ovdb' || path === '/ovdb/' || path === '/ovdb/v1' || path === '/ovdb/v1/databases') return json({ databases: [databaseMetadata] }, env);
+  if (path === '/.well-known/openvaultdb') return json({
+    name: 'ChinookDB OpenVaultDB', protocol: 'openvaultdb/0.1', version: '1.0.0', authEnabled: false,
+    databases: [{ id: 'chinook', url: canonicalDatabaseUrl, apiUrl: 'https://chinookdb.com/ovdb/v1/databases/chinook', capabilities: { read: true, query: true, write: false } }],
+  }, env);
+  if (path === '/ovdb' || path === '/ovdb/' || path === '/ovdb/dbs' || path === '/ovdb/dbs/' || path === '/ovdb/dbs/chinook' || path === '/ovdb/dbs/chinook/') return humanPage(request, env, path);
+  if (path.startsWith('/ovdb/dbs/')) return unknownDatabase();
+  if (path === '/ovdb/v1' || path === '/ovdb/v1/databases') return json({ databases: [databaseMetadata] }, env);
   if (path === '/ovdb/v1/databases/chinook') return json(databaseMetadata, env);
   if (path === '/ovdb/v1/databases/chinook/read') return readRecord(request, env, url);
   if (path === '/ovdb/v1/databases/chinook/query') return queryRecords(request, env, url);
   return error(404, 'not_found', 'OVDB endpoint not found');
+}
+
+async function humanPage(request: Request, env: Env, path: string): Promise<Response> {
+  const pagePath = path === '/ovdb' || path === '/ovdb/' ? '/ovdb/' : path === '/ovdb/dbs' || path === '/ovdb/dbs/' ? '/ovdb/dbs/' : '/ovdb/dbs/chinook/';
+  const asset = await env.ASSETS.fetch(new Request(new URL(`${pagePath}index.html`, request.url), { method: 'GET' }));
+  if (!asset.ok) return error(500, 'internal', 'OVDB page is unavailable');
+  const headers = new Headers(asset.headers);
+  headers.set('Content-Type', 'text/html; charset=utf-8');
+  headers.set('Cache-Control', 'public, max-age=300, must-revalidate');
+  headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('Link', `<${discoveryUrl}>; rel="describedby"; type="application/json", <https://chinookdb.com${pagePath === '/ovdb/dbs/chinook/' ? '/ovdb/dbs/chinook' : pagePath}>; rel="canonical"`);
+  return new Response(request.method === 'HEAD' ? null : asset.body, { status: 200, headers });
+}
+
+function unknownDatabase(): Response {
+  return new Response('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Database not found | ChinookDB</title></head><body><main><h1>Database not found</h1><p>This OpenVaultDB server has no database at this URL.</p><p><a href="/ovdb/dbs/">Browse available databases</a></p></main></body></html>', {
+    status: 404,
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
+  });
 }
 
 async function readRecord(request: Request, env: Env, url: URL): Promise<Response> {

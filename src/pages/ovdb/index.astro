@@ -1,0 +1,36 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { tables } from '../../data/model';
+
+const totalRows = tables.reduce((sum, table) => sum + table.rowCount, 0);
+---
+<BaseLayout title="OpenVaultDB server | ChinookDB" description="Explore the public, read-only Chinook database over OpenVaultDB.">
+  <section class="page-intro shell">
+    <p class="eyebrow">OpenVaultDB server</p>
+    <h1>Chinook over OVDB</h1>
+    <p>A public, read-only OpenVaultDB server for the Chinook sample database. Open a database profile, browse its tables, or use the machine API in your own client.</p>
+  </section>
+  <section class="shell section ovdb-layout">
+    <div class="content-card">
+      <p class="eyebrow">Available database</p>
+      <h2><a href="/ovdb/dbs/chinook">Chinook <span aria-hidden="true">→</span></a></h2>
+      <p>Digital music store sample data with {tables.length} tables and {totalRows.toLocaleString()} fixture rows. Static JSON provider; schema declared; no sign-in required.</p>
+      <a class="text-link" href="/ovdb/dbs/">View all databases →</a>
+    </div>
+    <div class="content-card">
+      <p class="eyebrow">Server capabilities</p>
+      <h2>Public reads and queries</h2>
+      <p>Read individual records and run bounded queries. Writes are disabled. The <a href="/.well-known/openvaultdb">discovery document</a> identifies this server and its machine endpoints.</p>
+      <dl><dt>Protocol</dt><dd><code>openvaultdb/0.1</code></dd><dt>Access</dt><dd>Anonymous, read-only</dd></dl>
+    </div>
+  </section>
+</BaseLayout>
+<style>
+  .ovdb-layout { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; }
+  .content-card p:not(.eyebrow) { color:var(--muted); margin:15px 0 25px; }
+  .content-card p a { color:var(--cyan); text-decoration:underline; }
+  .content-card h2 a:hover { color:var(--lime); }
+  dl { display:grid; grid-template-columns:90px 1fr; gap:8px 14px; margin:24px 0 0; font-size:13px; }
+  dt { color:var(--faint); } dd { margin:0; }
+  @media(max-width:700px) { .ovdb-layout { grid-template-columns:1fr; } }
+</style>
