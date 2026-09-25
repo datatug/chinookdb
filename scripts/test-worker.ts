@@ -34,8 +34,8 @@ const cache = {
 (globalThis as typeof globalThis & { caches?: { default?: typeof cache } }).caches = { default: cache };
 const ctx = { waitUntil(promise: Promise<unknown>) { void promise; } } as ExecutionContext;
 
-async function request(path: string, method: string, env: Record<string, unknown> = {}) {
-  return worker.fetch(new Request(`https://chinookdb.com${path}`, { method }), { ASSETS: assets, ...env }, ctx);
+async function request(path: string, method: string, env: Record<string, unknown> = {}, body?: unknown) {
+  return worker.fetch(new Request(`https://chinookdb.com${path}`, { method, ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) }), { ASSETS: assets, ...env }, ctx);
 }
 
 const json = await request('/data/json/chinook.Artist.json', 'GET');
@@ -76,7 +76,7 @@ assert.equal(method.headers.get('Access-Control-Allow-Origin'), '*');
 
 const discovery = await request('/ovdb/v1/databases', 'GET');
 assert.equal(discovery.status, 200);
-assert.deepEqual(await discovery.json(), { databases: [{ id: 'chinook', engine: 'static-json', schemaMode: 'strict', collections: ['Album', 'Artist', 'Customer', 'Employee', 'Genre', 'Invoice', 'InvoiceLine', 'MediaType', 'Playlist', 'PlaylistTrack', 'Track'], readOnly: true }] });
+assert.deepEqual(await discovery.json(), { databases: [{ id: 'chinook', engine: 'static-json', schemaMode: 'strict', collections: ['Album', 'Artist', 'Customer', 'Employee', 'Genre', 'Invoice', 'InvoiceLine', 'MediaType', 'Playlist', 'PlaylistTrack', 'Track'], readOnly: true, capabilities: { read: true, query: true, dtql: true, write: false }, endpoints: { dtql: 'https://chinookdb.com/ovdb/v1/databases/chinook/dtql' }, queryFormat: 'dtql-yaml+json' }] });
 assert.match(discovery.headers.get('Cache-Control') ?? '', /max-age=86400/);
 
 const discoverySlash = await request('/ovdb/', 'GET');
@@ -96,6 +96,43 @@ const query = encodeURIComponent(JSON.stringify({ collection: 'Artist', where: [
 const queried = await request(`/ovdb/v1/databases/chinook/query?q=${query}`, 'GET');
 assert.equal(queried.status, 200);
 assert.deepEqual(await queried.json(), { records: [{ key: 'Artist/1' }] });
+
+const bound = await request('/ovdb/v1/databases/chinook/dtql', 'POST', {}, {
+  query: 'from: {name: Album}\nwhere: {op: "==", left: {field: ArtistId}, right: {param: ArtistID}}\norderBy: [{field: AlbumId}]\nlimit: 2\n',
+  parameters: { ArtistID: 2 },
+});
+assert.equal(bound.status, 200);
+assert.deepEqual((await bound.json()).records.map((record: { data: { AlbumId: number } }) => record.data.AlbumId), [2, 3]);
+
+const dtqlPreflight = await request('/ovdb/v1/databases/chinook/dtql', 'OPTIONS');
+assert.equal(dtqlPreflight.status, 204);
+assert.match(dtqlPreflight.headers.get('Access-Control-Allow-Methods') ?? '', /POST/);
+assert.match(dtqlPreflight.headers.get('Access-Control-Allow-Headers') ?? '', /Content-Type/);
+
+const inQuery = await request('/ovdb/v1/databases/chinook/dtql', 'POST', {}, {
+  query: 'from: {name: Artist}\nwhere: {op: In, left: {field: ArtistId}, right: {values: [1, 2]}}\n',
+});
+assert.equal(inQuery.status, 200);
+assert.deepEqual((await inQuery.json()).records.map((record: { data: { ArtistId: number } }) => record.data.ArtistId), [1, 2]);
+
+const injection = await request('/ovdb/v1/databases/chinook/dtql', 'POST', {}, {
+  query: 'from: {name: Album}\nwhere: {op: "==", left: {field: Title}, right: {param: title}}\n',
+  parameters: { title: 'x"}]}\nfrom: {name: Customer}' },
+});
+assert.equal(injection.status, 200);
+assert.deepEqual((await injection.json()).records, []);
+
+const unsupportedDtql = await request('/ovdb/v1/databases/chinook/dtql', 'POST', {}, { query: 'from: {name: Album}\nfrom: {name: Customer}\n' });
+assert.equal(unsupportedDtql.status, 400);
+assert.equal((await unsupportedDtql.json()).error.code, 'invalid_dtql');
+
+const missingParam = await request('/ovdb/v1/databases/chinook/dtql', 'POST', {}, { query: 'from: {name: Album}\nwhere: {op: "==", left: {field: ArtistId}, right: {param: Who}}\n' });
+assert.equal(missingParam.status, 400);
+assert.match((await missingParam.json()).error.message, /Who is not bound/);
+
+const oversizedDtql = await request('/ovdb/v1/databases/chinook/dtql', 'POST', {}, { query: 'x'.repeat(70_000) });
+assert.equal(oversizedDtql.status, 400);
+assert.match((await oversizedDtql.json()).error.message, /65536 bytes/);
 
 const unboundedQuery = encodeURIComponent(JSON.stringify({ collection: 'Track', keysOnly: true }));
 const unbounded = await request(`/ovdb/v1/databases/chinook/query?q=${unboundedQuery}`, 'GET');

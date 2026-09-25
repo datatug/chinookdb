@@ -1,3 +1,5 @@
+import { compileDtql } from './dtql';
+
 type JsonObject = Record<string, unknown>;
 interface Query { collection: string; parent?: string; where?: Filter[]; orderBy?: OrderBy[]; limit?: number; keysOnly?: boolean }
 interface Filter { field: string; op: '==' | '<' | '<=' | '>' | '>=' | 'in' | 'array-contains' | 'array-contains-any'; value: unknown }
@@ -14,7 +16,12 @@ const tableFields: Record<string, ReadonlySet<string>> = {
   Album: new Set(['AlbumId', 'Title', 'ArtistId']), Artist: new Set(['ArtistId', 'Name']), Customer: new Set(['CustomerId', 'FirstName', 'LastName', 'Company', 'Address', 'City', 'State', 'Country', 'PostalCode', 'Phone', 'Fax', 'Email', 'SupportRepId']), Employee: new Set(['EmployeeId', 'LastName', 'FirstName', 'Title', 'ReportsTo', 'BirthDate', 'HireDate', 'Address', 'City', 'State', 'Country', 'PostalCode', 'Phone', 'Fax', 'Email']), Genre: new Set(['GenreId', 'Name']), MediaType: new Set(['MediaTypeId', 'Name']), Playlist: new Set(['PlaylistId', 'Name']), PlaylistTrack: new Set(['PlaylistId', 'TrackId']), Invoice: new Set(['InvoiceId', 'CustomerId', 'InvoiceDate', 'BillingAddress', 'BillingCity', 'BillingState', 'BillingCountry', 'BillingPostalCode', 'Total']), InvoiceLine: new Set(['InvoiceLineId', 'InvoiceId', 'TrackId', 'UnitPrice', 'Quantity']), Track: new Set(['TrackId', 'Name', 'AlbumId', 'MediaTypeId', 'GenreId', 'Composer', 'Milliseconds', 'Bytes', 'UnitPrice']),
 };
 const maxQueryBytes = 64 * 1024, maxResults = 10_000;
-const databaseMetadata = { id: 'chinook', engine: 'static-json', schemaMode: 'strict', collections: Object.keys(tableKeys), readOnly: true };
+const databaseMetadata = {
+  id: 'chinook', engine: 'static-json', schemaMode: 'strict', collections: Object.keys(tableKeys), readOnly: true,
+  capabilities: { read: true, query: true, dtql: true, write: false },
+  endpoints: { dtql: 'https://chinookdb.com/ovdb/v1/databases/chinook/dtql' },
+  queryFormat: 'dtql-yaml+json',
+};
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -36,6 +43,7 @@ async function handleData(request: Request, env: Env, url: URL): Promise<Respons
 
 async function handleOvdb(request: Request, env: Env, ctx: ExecutionContext, url: URL): Promise<Response> {
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders() });
+  if (request.method === 'POST' && url.pathname === '/ovdb/v1/databases/chinook/dtql') return dtqlRecords(request, env);
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)) return error(403, 'read_only', 'chinook is read-only');
   if (!['GET', 'HEAD'].includes(request.method)) return error(405, 'bad_request', `method not allowed: ${request.method}`);
   if (request.method === 'GET') {
@@ -70,6 +78,44 @@ async function queryRecords(request: Request, env: Env, url: URL): Promise<Respo
   if (!raw) return error(400, 'bad_request', 'q query parameter is required');
   if (new TextEncoder().encode(raw).byteLength > maxQueryBytes) return error(400, 'bad_request', `q must not exceed ${maxQueryBytes} bytes`);
   let query: Query; try { query = JSON.parse(raw) as Query } catch { return error(400, 'bad_request', 'q must be JSON') }
+  return executeQuery(request, env, query);
+}
+
+async function dtqlRecords(request: Request, env: Env): Promise<Response> {
+  if (request.headers.get('Content-Type')?.split(';')[0].trim() !== 'application/json') return error(415, 'unsupported_media_type', 'DTQL requests require application/json');
+  const body = await readLimitedBody(request, maxQueryBytes);
+  if (body === undefined) return error(400, 'bad_request', `body must not exceed ${maxQueryBytes} bytes`);
+  let payload: unknown;
+  try { payload = JSON.parse(body) } catch { return error(400, 'bad_request', 'body must be JSON') }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return error(400, 'bad_request', 'body must be an object');
+  const input = payload as Record<string, unknown>;
+  if (Object.keys(input).some((key) => !['query', 'parameters'].includes(key))) return error(400, 'bad_request', 'body contains an unsupported property');
+  let query: Query;
+  try { query = compileDtql(input.query as string, input.parameters ?? {}) } catch (cause) { return error(400, 'invalid_dtql', cause instanceof Error ? cause.message : 'invalid DTQL query') }
+  return executeQuery(request, env, query);
+}
+
+async function readLimitedBody(request: Request, limit: number): Promise<string | undefined> {
+  if (!request.body) return '';
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) { await reader.cancel(); return undefined }
+      chunks.push(value);
+    }
+  } finally { reader.releaseLock() }
+  const body = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.byteLength }
+  return new TextDecoder().decode(body);
+}
+
+async function executeQuery(request: Request, env: Env, query: Query): Promise<Response> {
   const valid = validateQuery(query); if (!valid.ok) return error(400, 'bad_request', valid.message);
   const rows = await loadTable(request, env, valid.query.collection); if (!rows) return error(500, 'internal', 'canonical table asset is unavailable');
   let results = rows.filter((row) => matches(row, valid.query.where ?? []));
@@ -114,5 +160,5 @@ function json(body: unknown, env: Env): Response { const ttl = cacheTtl(env); re
 function error(status: number, code: string, message: string): Response { return new Response(JSON.stringify({ error: { code, message } }), { status, headers: { ...corsHeaders(), 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } }); }
 function cacheTtl(env: Env): number { const value = Number(env.OVDB_CACHE_TTL_SECONDS); return Number.isInteger(value) && value >= 0 && value <= 31_536_000 ? value : 86_400; }
 function edgeCache(): EdgeCache | undefined { return (globalThis as typeof globalThis & { caches?: { default?: EdgeCache } }).caches?.default; }
-function corsHeaders(): Record<string, string> { return { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Max-Age': '86400' }; }
+function corsHeaders(): Record<string, string> { return { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS, POST', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Max-Age': '86400' }; }
 function setCorsHeaders(headers: Headers): void { for (const [name, value] of Object.entries(corsHeaders())) headers.set(name, value); }
