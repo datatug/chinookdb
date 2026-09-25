@@ -49,54 +49,31 @@ Data responses are served by the Worker with explicit content types, public
 cache headers, and permissive read-only CORS. Missing `/data/` files return a
 JSON 404 rather than the HTML site fallback.
 
-## Read-only OVDB endpoint
+## OpenVaultDB connection
 
-`https://chinookdb.com/ovdb/` is a human-facing server page. The database
-catalogue is `/ovdb/dbs/`, and the canonical Chinook connection URL is
-`https://chinookdb.com/ovdb/dbs/chinook`. Each page works without JavaScript;
-the database profile links to the table schema and data. Unknown database
-profiles return an HTML 404.
+The public Chinook database is served by the OpenVaultDB Cloud Go service at
+`https://cloud.openvaultdb.com/ovdb/dbs/chinook`. Its `/ovdb/` pages, discovery,
+metadata, and `/v1/databases/chinook` API come from the reusable OVDB server.
+The service mounts a read-only SQLite copy of the pinned upstream fixture.
+Cloud Run deployment and the ChinookDB site cutover are coordinated; this
+checkout alone does not make the cloud endpoint live.
 
-For existing clients, `GET /ovdb/` with explicit `Accept: application/json`
-still returns the original `{ "databases": [...] }` response. Browser/default
-requests receive HTML. New machine clients should use the stable versioned
-`GET /ovdb/v1/databases` endpoint. The negotiated root sends `Vary: Accept`.
-
-Clients start at `GET /.well-known/openvaultdb` on the same origin. Its
-`databases` list adds the canonical `url`, the versioned machine-metadata
-`apiUrl`, and public capability flags for each database. The profile also
-sends an HTTP `Link` header with `rel="describedby"` to that document and a
-canonical link to itself. This is ChinookDB's discovery profile; it extends
-the existing OpenVaultDB well-known document without claiming a new generic
-OVDB discovery standard. The database URL is a stable identity and browser
-destination; machine operations remain at `/ovdb/v1/`.
-
-The machine API exposes the fixture through a public, server-wide read-only
-OVDB-compatible endpoint. Every mutation attempt is rejected
-with `403 {"error":{"code":"read_only"}}`; no credentials are accepted or
-needed. Successful public GET responses have `Cache-Control: public` and are
-stored in the Worker Cache API using the complete URL as the edge-cache key.
-Set the non-secret Worker variable `OVDB_CACHE_TTL_SECONDS` to change the TTL;
-it defaults to 86,400 seconds (one day).
-
-Discovery reports `engine: "static-json"`: the Worker reads generated public
-JSON assets, not a live SQLite engine. It reports `schemaMode: "strict"` and
-lists every fixed Chinook table in `collections`.
+Old `chinookdb.com/ovdb/` page URLs redirect to the cloud pages. The old
+`/.well-known/openvaultdb` document remains as a compatibility alias for
+clients that saved the old connection URL. Legacy `/ovdb/v1/` paths redirect to
+cloud `/v1/` paths, except the former static-JSON `GET /query?q=...` shape,
+which returns 410 because its query syntax is different.
 
 ## DataTug Embed and DTQL
 
 Every `/tables/<Table>/` page loads the framework-neutral DataTug Embed bundle
-from `/embed/datatug.js`. The Album page demonstrates an OVDB connection URL,
-DTQL YAML and a bound parameter; the other table pages load their public JSON
-files directly. The bundle is served with cross-origin access for third-party
-module scripts. It is built from `datatug-apps/libs/datatug/embed` and
-copied into `public/embed/` for deployment with this static site.
-
-The Album example can also be placed on another ordinary HTML page:
+from `/embed/datatug.js`. The Album page demonstrates the hosted OVDB
+connection URL, DTQL YAML, and a bound parameter; the other table pages load
+their public JSON files directly. Downloads remain on chinookdb.com.
 
 ```html
 <script type="module" src="https://chinookdb.com/embed/datatug.js"></script>
-<datatug-grid connection="https://chinookdb.com/ovdb/dbs/chinook">
+<datatug-grid connection="https://cloud.openvaultdb.com/ovdb/dbs/chinook">
   <dtql-query>
 from: {name: Album}
 where: {op: ">=", left: {field: ArtistId}, right: {param: MinArtistID}}
@@ -107,38 +84,10 @@ limit: 50
 </datatug-grid>
 ```
 
-For direct data, use `<datatug-grid
-data-url="https://chinookdb.com/data/json/chinook.Album.json"></datatug-grid>`.
-The Worker accepts `POST /ovdb/v1/databases/chinook/dtql` with JSON
-`{"query":"<DTQL YAML>","parameters":{"MinArtistID":1}}`. Discovery at
-`/.well-known/openvaultdb` identifies the canonical database URL and metadata
-API; metadata advertises the DTQL endpoint and `dtql-yaml+json` format. This
-server implements a bounded read-only DTQL subset: `from.name`, simple `where`
-and `and` filters, `orderBy`, and `limit`. Unsupported clauses return an
-explicit error. Parameter values travel separately as JSON bindings and are
-never substituted into the query text.
-
-```text
-GET /.well-known/openvaultdb
-GET /ovdb/v1/databases
-GET /ovdb/v1/databases/chinook
-GET /ovdb/v1/databases/chinook/read?key=Artist%2F1
-GET /ovdb/v1/databases/chinook/read?key=PlaylistTrack%2F1%2C3402
-GET /ovdb/v1/databases/chinook/query?q=%7B%22collection%22%3A%22Track%22%2C%22where%22%3A%5B%7B%22field%22%3A%22GenreId%22%2C%22op%22%3A%22%3D%3D%22%2C%22value%22%3A1%7D%5D%2C%22limit%22%3A3%7D
-```
-
-The read response is `{"key":"Artist/1","data":{...}}`. Query responses
-are `{"records":[{"key":"Track/1","data":{...}}]}`; use
-`"keysOnly":true` to omit `data`. Queries accept the OVDB core query fields
-`collection`, `where`, `orderBy`, `limit`, and `keysOnly`. This is a bounded
-Chinook query subset: unsupported fields (including pagination offsets) are
-rejected rather than ignored, and `parent` is rejected because Chinook tables
-are flat. Filters are AND-ed and support `==`, `<`, `<=`, `>`, `>=`, `in`,
-`array-contains`, and `array-contains-any`. Inputs are bounded to 64 KiB and
-`limit: 0` (or an omitted limit) preserves OVDB's unbounded-query meaning for
-the fixed fixture. A result over 10,000 records is explicitly rejected instead
-of being truncated. Set the TTL to `0` to disable cache storage and return
-`Cache-Control: no-store`.
+The Go server advertises `dtql-yaml+json` in database metadata and accepts
+`POST /v1/databases/chinook/dtql` with JSON containing the YAML `query` and
+separate `parameters` object. Scalar and scalar-array bindings are parsed as
+values before DTQL execution. The server remains read-only.
 
 ## Attribution and licence
 

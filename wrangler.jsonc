@@ -3,9 +3,6 @@
   "name": "chinookdb",
   "main": "src/worker.ts",
   "compatibility_date": "2026-09-21",
-  "vars": {
-    "OVDB_CACHE_TTL_SECONDS": "86400"
-  },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
