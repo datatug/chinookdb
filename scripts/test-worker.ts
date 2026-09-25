@@ -35,8 +35,8 @@ const cache = {
 (globalThis as typeof globalThis & { caches?: { default?: typeof cache } }).caches = { default: cache };
 const ctx = { waitUntil(promise: Promise<unknown>) { void promise; } } as ExecutionContext;
 
-async function request(path: string, method: string, env: Record<string, unknown> = {}) {
-  return worker.fetch(new Request(`https://chinookdb.com${path}`, { method }), { ASSETS: assets, ...env }, ctx);
+async function request(path: string, method: string, env: Record<string, unknown> = {}, headers: Record<string, string> = {}) {
+  return worker.fetch(new Request(`https://chinookdb.com${path}`, { method, headers }), { ASSETS: assets, ...env }, ctx);
 }
 
 const json = await request('/data/json/chinook.Artist.json', 'GET');
@@ -87,6 +87,15 @@ assert.deepEqual(await wellKnown.json(), {
   name: 'ChinookDB OpenVaultDB', protocol: 'openvaultdb/0.1', version: '1.0.0', authEnabled: false,
   databases: [{ id: 'chinook', url: 'https://chinookdb.com/ovdb/dbs/chinook', apiUrl: 'https://chinookdb.com/ovdb/v1/databases/chinook', capabilities: { read: true, query: true, write: false } }],
 });
+
+const legacyJson = await request('/ovdb/', 'GET', {}, { Accept: 'application/json' });
+assert.equal(legacyJson.status, 200);
+assert.equal(legacyJson.headers.get('Vary'), 'Accept');
+assert.deepEqual((await legacyJson.json()).databases, [
+  { id: 'chinook', engine: 'static-json', schemaMode: 'strict', collections: ['Album', 'Artist', 'Customer', 'Employee', 'Genre', 'Invoice', 'InvoiceLine', 'MediaType', 'Playlist', 'PlaylistTrack', 'Track'], readOnly: true },
+]);
+const explicitHtml = await request('/ovdb/', 'GET', {}, { Accept: 'text/html, application/json;q=0' });
+assert.equal(explicitHtml.headers.get('Content-Type'), 'text/html; charset=utf-8');
 
 for (const [path, heading, link] of [
   ['/ovdb/', 'Chinook over OVDB', '/ovdb/dbs/'],

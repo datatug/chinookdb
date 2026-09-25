@@ -41,7 +41,9 @@ async function handleOvdb(request: Request, env: Env, ctx: ExecutionContext, url
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)) return error(403, 'read_only', 'chinook is read-only');
   if (!['GET', 'HEAD'].includes(request.method)) return error(405, 'bad_request', `method not allowed: ${request.method}`);
   if (request.method === 'GET') {
-    const ttl = cacheTtl(env), cache = ttl > 0 ? edgeCache() : undefined, cached = cache ? await cache.match(request) : undefined;
+    // The legacy root may serve JSON or HTML according to Accept; do not key its edge cache on URL alone.
+    const negotiatedRoot = url.pathname === '/ovdb' || url.pathname === '/ovdb/';
+    const ttl = cacheTtl(env), cache = ttl > 0 && !negotiatedRoot ? edgeCache() : undefined, cached = cache ? await cache.match(request) : undefined;
     if (cached) return cached;
     const response = await ovdbGet(request, env, url);
     if (response.ok && cache) ctx.waitUntil(cache.put(request, response.clone()));
@@ -56,6 +58,11 @@ async function ovdbGet(request: Request, env: Env, url: URL): Promise<Response> 
     name: 'ChinookDB OpenVaultDB', protocol: 'openvaultdb/0.1', version: '1.0.0', authEnabled: false,
     databases: [{ id: 'chinook', url: canonicalDatabaseUrl, apiUrl: 'https://chinookdb.com/ovdb/v1/databases/chinook', capabilities: { read: true, query: true, write: false } }],
   }, env);
+  if ((path === '/ovdb' || path === '/ovdb/') && requestsJson(request)) {
+    const response = json({ databases: [databaseMetadata] }, env);
+    response.headers.set('Vary', 'Accept');
+    return response;
+  }
   if (path === '/ovdb' || path === '/ovdb/' || path === '/ovdb/dbs' || path === '/ovdb/dbs/' || path === '/ovdb/dbs/chinook' || path === '/ovdb/dbs/chinook/') return humanPage(request, env, path);
   if (path.startsWith('/ovdb/dbs/')) return unknownDatabase();
   if (path === '/ovdb/v1' || path === '/ovdb/v1/databases') return json({ databases: [databaseMetadata] }, env);
@@ -73,8 +80,16 @@ async function humanPage(request: Request, env: Env, path: string): Promise<Resp
   headers.set('Content-Type', 'text/html; charset=utf-8');
   headers.set('Cache-Control', 'public, max-age=300, must-revalidate');
   headers.set('X-Content-Type-Options', 'nosniff');
+  if (pagePath === '/ovdb/') headers.set('Vary', 'Accept');
   headers.set('Link', `<${discoveryUrl}>; rel="describedby"; type="application/json", <https://chinookdb.com${pagePath === '/ovdb/dbs/chinook/' ? '/ovdb/dbs/chinook' : pagePath}>; rel="canonical"`);
   return new Response(request.method === 'HEAD' ? null : asset.body, { status: 200, headers });
+}
+
+function requestsJson(request: Request): boolean {
+  return (request.headers.get('Accept') ?? '').split(',').some((part) => {
+    const [mediaType, ...parameters] = part.trim().toLowerCase().split(';');
+    return mediaType.trim() === 'application/json' && !parameters.some((parameter) => /^\s*q\s*=\s*0(?:\.0*)?\s*$/.test(parameter));
+  });
 }
 
 function unknownDatabase(): Response {

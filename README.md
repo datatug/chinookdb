@@ -57,6 +57,11 @@ catalogue is `/ovdb/dbs/`, and the canonical Chinook connection URL is
 the database profile links to the table schema and data. Unknown database
 profiles return an HTML 404.
 
+For existing clients, `GET /ovdb/` with explicit `Accept: application/json`
+still returns the original `{ "databases": [...] }` response. Browser/default
+requests receive HTML. New machine clients should use the stable versioned
+`GET /ovdb/v1/databases` endpoint. The negotiated root sends `Vary: Accept`.
+
 Clients start at `GET /.well-known/openvaultdb` on the same origin. Its
 `databases` list adds the canonical `url`, the versioned machine-metadata
 `apiUrl`, and public capability flags for each database. The profile also
