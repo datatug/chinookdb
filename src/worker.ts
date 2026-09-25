@@ -33,13 +33,15 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 async function handleData(request: Request, env: Env, url: URL): Promise<Response> {
-  if (url.pathname !== '/data' && !url.pathname.startsWith('/data/')) return env.ASSETS.fetch(request);
+  const embedScript = url.pathname === '/embed/datatug.js';
+  if (!embedScript && url.pathname !== '/data' && !url.pathname.startsWith('/data/')) return env.ASSETS.fetch(request);
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders() });
   if (!['GET', 'HEAD'].includes(request.method)) return new Response('Method Not Allowed', { status: 405, headers: corsHeaders() });
   const asset = await env.ASSETS.fetch(request);
   if (asset.status === 404) return new Response(request.method === 'HEAD' ? null : JSON.stringify({ error: 'Not found' }), { status: 404, headers: { ...corsHeaders(), 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
   const headers = new Headers(asset.headers); setCorsHeaders(headers); headers.set('Cache-Control', 'public, max-age=300, must-revalidate'); headers.set('X-Content-Type-Options', 'nosniff');
   const extension = url.pathname.slice(url.pathname.lastIndexOf('.')).toLowerCase(); if (contentTypes[extension]) headers.set('Content-Type', contentTypes[extension]);
+  if (embedScript) headers.set('Content-Type', 'text/javascript; charset=utf-8');
   return new Response(asset.body, { status: asset.status, headers });
 }
 

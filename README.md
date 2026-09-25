@@ -88,7 +88,8 @@ lists every fixed Chinook table in `collections`.
 Every `/tables/<Table>/` page loads the framework-neutral DataTug Embed bundle
 from `/embed/datatug.js`. The Album page demonstrates an OVDB connection URL,
 DTQL YAML and a bound parameter; the other table pages load their public JSON
-files directly. The bundle is built from `datatug-apps/libs/datatug/embed` and
+files directly. The bundle is served with cross-origin access for third-party
+module scripts. It is built from `datatug-apps/libs/datatug/embed` and
 copied into `public/embed/` for deployment with this static site.
 
 The Album example can also be placed on another ordinary HTML page:

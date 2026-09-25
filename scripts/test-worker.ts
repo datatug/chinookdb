@@ -7,6 +7,7 @@ import worker from '../src/worker.ts';
 const root = join(fileURLToPath(new URL('.', import.meta.url)), '..');
 const wrangler = JSON.parse(await readFile(join(root, 'wrangler.jsonc'), 'utf8')) as { assets: { run_worker_first: string[] } };
 assert.ok(wrangler.assets.run_worker_first.includes('/data/*'), 'wrangler must route /data/* through the Worker first');
+assert.ok(wrangler.assets.run_worker_first.includes('/embed/datatug.js'), 'wrangler must route the cross-origin ES module through the Worker first');
 assert.ok(wrangler.assets.run_worker_first.includes('/ovdb'), 'wrangler must route /ovdb through the Worker first');
 assert.ok(wrangler.assets.run_worker_first.includes('/ovdb/*'), 'wrangler must route /ovdb/* through the Worker first');
 assert.ok(wrangler.assets.run_worker_first.includes('/.well-known/openvaultdb'), 'wrangler must route discovery through the Worker first');
@@ -40,6 +41,14 @@ async function request(path: string, method: string, env: Record<string, unknown
 }
 
 const json = await request('/data/json/chinook.Artist.json', 'GET');
+const embed = await request('/embed/datatug.js', 'GET');
+assert.equal(embed.status, 200);
+assert.equal(embed.headers.get('Access-Control-Allow-Origin'), '*');
+assert.equal(embed.headers.get('Content-Type'), 'text/javascript; charset=utf-8');
+assert.match(await embed.text(), /datatug-grid/);
+const embedPreflight = await request('/embed/datatug.js', 'OPTIONS');
+assert.equal(embedPreflight.status, 204);
+assert.equal(embedPreflight.headers.get('Access-Control-Allow-Origin'), '*');
 assert.equal(json.status, 200);
 assert.equal(json.headers.get('Access-Control-Allow-Origin'), '*');
 assert.match(json.headers.get('Cache-Control') ?? '', /^public,/);
