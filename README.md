@@ -51,8 +51,28 @@ JSON 404 rather than the HTML site fallback.
 
 ## Read-only OVDB endpoint
 
-`https://chinookdb.com/ovdb/` exposes the fixture through a public,
-server-wide read-only OVDB-compatible API. Every mutation attempt is rejected
+`https://chinookdb.com/ovdb/` is a human-facing server page. The database
+catalogue is `/ovdb/dbs/`, and the canonical Chinook connection URL is
+`https://chinookdb.com/ovdb/dbs/chinook`. Each page works without JavaScript;
+the database profile links to the table schema and data. Unknown database
+profiles return an HTML 404.
+
+For existing clients, `GET /ovdb/` with explicit `Accept: application/json`
+still returns the original `{ "databases": [...] }` response. Browser/default
+requests receive HTML. New machine clients should use the stable versioned
+`GET /ovdb/v1/databases` endpoint. The negotiated root sends `Vary: Accept`.
+
+Clients start at `GET /.well-known/openvaultdb` on the same origin. Its
+`databases` list adds the canonical `url`, the versioned machine-metadata
+`apiUrl`, and public capability flags for each database. The profile also
+sends an HTTP `Link` header with `rel="describedby"` to that document and a
+canonical link to itself. This is ChinookDB's discovery profile; it extends
+the existing OpenVaultDB well-known document without claiming a new generic
+OVDB discovery standard. The database URL is a stable identity and browser
+destination; machine operations remain at `/ovdb/v1/`.
+
+The machine API exposes the fixture through a public, server-wide read-only
+OVDB-compatible endpoint. Every mutation attempt is rejected
 with `403 {"error":{"code":"read_only"}}`; no credentials are accepted or
 needed. Successful public GET responses have `Cache-Control: public` and are
 stored in the Worker Cache API using the complete URL as the edge-cache key.
@@ -64,7 +84,9 @@ JSON assets, not a live SQLite engine. It reports `schemaMode: "strict"` and
 lists every fixed Chinook table in `collections`.
 
 ```text
+GET /.well-known/openvaultdb
 GET /ovdb/v1/databases
+GET /ovdb/v1/databases/chinook
 GET /ovdb/v1/databases/chinook/read?key=Artist%2F1
 GET /ovdb/v1/databases/chinook/read?key=PlaylistTrack%2F1%2C3402
 GET /ovdb/v1/databases/chinook/query?q=%7B%22collection%22%3A%22Track%22%2C%22where%22%3A%5B%7B%22field%22%3A%22GenreId%22%2C%22op%22%3A%22%3D%3D%22%2C%22value%22%3A1%7D%5D%2C%22limit%22%3A3%7D
