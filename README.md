@@ -41,9 +41,11 @@ Public URLs follow this stable convention:
 
 The site is a Cloudflare Worker using current Workers Static Assets. The
 `wrangler.jsonc` configuration targets the `chinookdb` Worker and the
-`chinookdb.com` custom domain. Cloudflare Workers Builds runs the production
-build on pushes to `main`; the repository workflow provides credential-free CI
-build and data validation on pushes and pull requests.
+`chinookdb.com` custom domain. The repository workflow validates pushes and
+pull requests, but does not publish the Worker. After a validated change lands
+on `main`, deploy it from the synced main checkout with `pnpm build` followed
+by `pnpm exec wrangler deploy`, then verify the public site and the deployed
+Worker version with `pnpm exec wrangler deployments list --name chinookdb --json`.
 
 Data responses are served by the Worker with explicit content types, public
 cache headers, and permissive read-only CORS. Missing `/data/` files return a
