@@ -103,6 +103,8 @@ for (const [path, heading, link] of [
   const page = await request(path, 'GET');
   assert.equal(page.status, 200, path);
   assert.equal(page.headers.get('Content-Type'), 'text/html; charset=utf-8');
+  assert.equal(page.headers.get('Access-Control-Allow-Origin'), '*');
+  assert.match(page.headers.get('Access-Control-Expose-Headers') ?? '', /Link/);
   assert.match(page.headers.get('Link') ?? '', /rel="describedby"/);
   assert.match(page.headers.get('Link') ?? '', /rel="canonical"/);
   const html = await page.text();

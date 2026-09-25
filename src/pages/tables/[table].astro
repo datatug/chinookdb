@@ -19,5 +19,13 @@ const inbound = tables.filter((candidate) => candidate.foreignKeys.some((foreign
 <style>
   .schema-scroll { margin-bottom: -25px; }
   .schema-table tbody tr:last-child > * { border-bottom: 0; }
-  datatug-grid { display: block; margin: 0 -25px -25px; min-height: 240px; }
+  datatug-grid {
+    display: block; margin: 0 -25px -25px; min-height: 240px;
+    --datatug-bg: var(--panel); --datatug-fg: var(--ink);
+    --datatug-muted: var(--muted); --datatug-border: var(--line);
+    --datatug-header-bg: var(--panel-2); --datatug-hover: #1b304b;
+    --datatug-selected: #25415e; --datatug-accent: var(--lime);
+    --datatug-button-bg: var(--panel-2); --datatug-error: #ff9ca5;
+    --datatug-radius: 0 0 7px 7px;
+  }
 </style>

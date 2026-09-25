@@ -83,6 +83,40 @@ Discovery reports `engine: "static-json"`: the Worker reads generated public
 JSON assets, not a live SQLite engine. It reports `schemaMode: "strict"` and
 lists every fixed Chinook table in `collections`.
 
+## DataTug Embed and DTQL
+
+Every `/tables/<Table>/` page loads the framework-neutral DataTug Embed bundle
+from `/embed/datatug.js`. The Album page demonstrates an OVDB connection URL,
+DTQL YAML and a bound parameter; the other table pages load their public JSON
+files directly. The bundle is built from `datatug-apps/libs/datatug/embed` and
+copied into `public/embed/` for deployment with this static site.
+
+The Album example can also be placed on another ordinary HTML page:
+
+```html
+<script type="module" src="https://chinookdb.com/embed/datatug.js"></script>
+<datatug-grid connection="https://chinookdb.com/ovdb/dbs/chinook">
+  <dtql-query>
+from: {name: Album}
+where: {op: ">=", left: {field: ArtistId}, right: {param: MinArtistID}}
+orderBy: [{field: AlbumId}]
+limit: 50
+  </dtql-query>
+  <dtql-param name="MinArtistID" value="1" type="number"></dtql-param>
+</datatug-grid>
+```
+
+For direct data, use `<datatug-grid
+data-url="https://chinookdb.com/data/json/chinook.Album.json"></datatug-grid>`.
+The Worker accepts `POST /ovdb/v1/databases/chinook/dtql` with JSON
+`{"query":"<DTQL YAML>","parameters":{"MinArtistID":1}}`. Discovery at
+`/.well-known/openvaultdb` identifies the canonical database URL and metadata
+API; metadata advertises the DTQL endpoint and `dtql-yaml+json` format. This
+server implements a bounded read-only DTQL subset: `from.name`, simple `where`
+and `and` filters, `orderBy`, and `limit`. Unsupported clauses return an
+explicit error. Parameter values travel separately as JSON bindings and are
+never substituted into the query text.
+
 ```text
 GET /.well-known/openvaultdb
 GET /ovdb/v1/databases

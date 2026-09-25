@@ -88,6 +88,8 @@ async function humanPage(request: Request, env: Env, path: string): Promise<Resp
   headers.set('Content-Type', 'text/html; charset=utf-8');
   headers.set('Cache-Control', 'public, max-age=300, must-revalidate');
   headers.set('X-Content-Type-Options', 'nosniff');
+  setCorsHeaders(headers);
+  headers.set('Access-Control-Expose-Headers', 'Link');
   if (pagePath === '/ovdb/') headers.set('Vary', 'Accept');
   headers.set('Link', `<${discoveryUrl}>; rel="describedby"; type="application/json", <https://chinookdb.com${pagePath === '/ovdb/dbs/chinook/' ? '/ovdb/dbs/chinook' : pagePath}>; rel="canonical"`);
   return new Response(request.method === 'HEAD' ? null : asset.body, { status: 200, headers });
