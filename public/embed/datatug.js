@@ -11,11 +11,11 @@ function O(s) {
   const t = N(s) ? s : void 0, r = Array.isArray(s) ? s : t?.records ?? t?.rows ?? t?.data;
   if (!Array.isArray(r)) throw new Error("JSON source must be a row array or contain records, rows, or data.");
   const e = [], a = [];
-  for (const n of r) {
-    if (!N(n)) throw new Error("Every JSON row must be an object.");
-    N(n.data) && typeof n.key == "string" ? (e.push(n.data), a.push(n.key)) : e.push(n);
+  for (const o of r) {
+    if (!N(o)) throw new Error("Every JSON row must be an object.");
+    N(o.data) && typeof o.key == "string" ? (e.push(o.data), a.push(o.key)) : e.push(o);
   }
-  const c = Array.isArray(t?.columns) && t.columns.every((n) => typeof n == "string") ? t.columns : [...new Set(e.flatMap((n) => Object.keys(n)))];
+  const c = Array.isArray(t?.columns) && t.columns.every((o) => typeof o == "string") ? t.columns : [...new Set(e.flatMap((o) => Object.keys(o)))];
   return { rows: e, columns: c, keys: a.length === e.length ? a : void 0, metadata: t };
 }
 function U(s) {
@@ -23,23 +23,23 @@ function U(s) {
   let r = [], e = "", a = !1;
   const c = s.replace(/^\uFEFF/, "");
   for (let l = 0; l < c.length; l++) {
-    const o = c[l];
+    const n = c[l];
     if (a)
-      o === '"' && c[l + 1] === '"' ? (e += '"', l++) : o === '"' ? a = !1 : e += o;
-    else if (o === '"') {
+      n === '"' && c[l + 1] === '"' ? (e += '"', l++) : n === '"' ? a = !1 : e += n;
+    else if (n === '"') {
       if (e) throw new Error("Malformed CSV quote.");
       a = !0;
-    } else o === "," ? (r.push(e), e = "") : o === `
-` || o === "\r" ? (o === "\r" && c[l + 1] === `
-` && l++, r.push(e), t.push(r), r = [], e = "") : e += o;
+    } else n === "," ? (r.push(e), e = "") : n === `
+` || n === "\r" ? (n === "\r" && c[l + 1] === `
+` && l++, r.push(e), t.push(r), r = [], e = "") : e += n;
   }
   if (a) throw new Error("Unclosed CSV quote.");
   if ((e || r.length) && (r.push(e), t.push(r)), !t.length) return { rows: [], columns: [] };
-  const n = t.shift();
-  if (n.some((l) => !l) || new Set(n).size !== n.length) throw new Error("CSV header columns must be nonempty and unique.");
-  return { columns: n, rows: t.map((l) => {
-    if (l.length !== n.length) throw new Error("CSV row has a different number of columns than its header.");
-    return Object.fromEntries(n.map((o, d) => [o, l[d]]));
+  const o = t.shift() ?? [];
+  if (o.some((l) => !l) || new Set(o).size !== o.length) throw new Error("CSV header columns must be nonempty and unique.");
+  return { columns: o, rows: t.map((l) => {
+    if (l.length !== o.length) throw new Error("CSV row has a different number of columns than its header.");
+    return Object.fromEntries(o.map((n, d) => [n, l[d]]));
   }) };
 }
 function M(s, t, r) {
@@ -67,7 +67,7 @@ async function V(s, t, r) {
   return M(a.headers.get("Content-Type"), e, t) === "json" ? O(await a.json()) : U(await a.text());
 }
 async function R(s, t, r, e) {
-  const a = k(s, document.baseURI), c = new URL("/.well-known/openvaultdb", a.origin), o = (await (await L(await fetch(c, { signal: e, credentials: "same-origin", headers: { Accept: "application/json" } }), "OVDB discovery")).json()).databases?.find((v) => {
+  const a = k(s, document.baseURI), c = new URL("/.well-known/openvaultdb", a.origin), n = (await (await L(await fetch(c, { signal: e, credentials: "same-origin", headers: { Accept: "application/json" } }), "OVDB discovery")).json()).databases?.find((v) => {
     if (!v.url) return !1;
     try {
       return k(v.url, c.href).href.replace(/\/$/, "") === a.href.replace(/\/$/, "");
@@ -75,17 +75,17 @@ async function R(s, t, r, e) {
       return !1;
     }
   });
-  if (!o?.apiUrl) throw new Error("OVDB discovery does not list this database connection URL.");
-  const d = k(o.apiUrl, c.href), h = await (await L(await fetch(d, { signal: e, credentials: "same-origin", headers: { Accept: "application/json" } }), "OVDB database metadata")).json(), b = h.capabilities ?? o.capabilities;
-  if (!(Array.isArray(b) ? b.includes("dtql") : N(b) && b.dtql === !0) || !h.endpoints?.dtql) throw new Error("This OVDB database does not advertise DTQL queries.");
-  const g = k(h.endpoints.dtql, d.href);
+  if (!n?.apiUrl) throw new Error("OVDB discovery does not list this database connection URL.");
+  const d = k(n.apiUrl, c.href), u = await (await L(await fetch(d, { signal: e, credentials: "same-origin", headers: { Accept: "application/json" } }), "OVDB database metadata")).json(), b = u.capabilities ?? n.capabilities;
+  if (!(Array.isArray(b) ? b.includes("dtql") : N(b) && b.dtql === !0) || !u.endpoints?.dtql) throw new Error("This OVDB database does not advertise DTQL queries.");
+  const g = k(u.endpoints.dtql, d.href);
   let E, x;
-  if (h.queryFormat === "dtql-yaml+json")
+  if (u.queryFormat === "dtql-yaml+json")
     E = JSON.stringify({ query: t, parameters: r }), x = "application/json";
-  else if (h.queryFormat === "dtql-yaml") {
+  else if (u.queryFormat === "dtql-yaml") {
     if (Object.keys(r).length) throw new Error("This OVDB endpoint does not support bound DTQL parameters.");
     E = t, x = "application/yaml";
-  } else throw new Error(`Unsupported OVDB query format: ${h.queryFormat ?? "missing"}.`);
+  } else throw new Error(`Unsupported OVDB query format: ${u.queryFormat ?? "missing"}.`);
   const A = await L(await fetch(g, { method: "POST", signal: e, credentials: "same-origin", headers: { "Content-Type": x, Accept: "application/json" }, body: E }), "DTQL query");
   return O(await A.json());
 }
@@ -177,19 +177,20 @@ class $ extends HTMLElement {
     const r = ++this.revision;
     this.state = "loading", this.message = "Loading data…", this.render();
     try {
-      const e = this.getAttribute("connection"), a = this.getAttribute("data-url"), c = [...this.children].filter((d) => d.localName === "dtql-query"), n = [...this.children].filter((d) => d.localName === "dtql-param");
+      const e = this.getAttribute("connection"), a = this.getAttribute("data-url"), c = [...this.children].filter((h) => h.localName === "dtql-query"), o = c[0], l = [...this.children].filter((h) => h.localName === "dtql-param");
       if (!!e == !!a) throw new Error("Set exactly one of connection or data-url.");
-      if (a && (c.length || n.length)) throw new Error("data-url cannot be combined with DTQL query or parameters.");
-      if (e && (c.length !== 1 || !c[0].textContent?.trim())) throw new Error("A connection requires one nonempty <dtql-query>.");
-      const l = {};
-      for (const d of n) {
-        const m = d.getAttribute("name");
-        if (!m || Object.hasOwn(l, m)) throw new Error("Every <dtql-param> needs a unique nonempty name.");
-        l[m] = d.value;
+      if (a && (c.length || l.length)) throw new Error("data-url cannot be combined with DTQL query or parameters.");
+      if (e && (c.length !== 1 || !o?.textContent?.trim())) throw new Error("A connection requires one nonempty <dtql-query>.");
+      const n = {};
+      for (const h of l) {
+        const u = h.getAttribute("name");
+        if (!u || Object.hasOwn(n, u)) throw new Error("Every <dtql-param> needs a unique nonempty name.");
+        n[u] = h.value;
       }
-      const o = a ? await V(a, this.getAttribute("format"), t.signal) : await R(e, c[0].textContent.trim(), l, t.signal);
+      if (!a && (!e || !o?.textContent)) throw new Error("A connection requires one nonempty <dtql-query>.");
+      const d = a ? await V(a, this.getAttribute("format"), t.signal) : await R(e, o?.textContent?.trim() ?? "", n, t.signal);
       if (t.signal.aborted || r !== this.revision) return;
-      this.data = o, this.state = o.rows.length ? "ready" : "empty", this.message = o.rows.length ? "" : "No rows found.", this.render(), this.dispatchEvent(new CustomEvent("datatug-data-loaded", { detail: { rows: o.rows.length, columns: o.columns, metadata: o.metadata }, bubbles: !0 }));
+      this.data = d, this.state = d.rows.length ? "ready" : "empty", this.message = d.rows.length ? "" : "No rows found.", this.render(), this.dispatchEvent(new CustomEvent("datatug-data-loaded", { detail: { rows: d.rows.length, columns: d.columns, metadata: d.metadata }, bubbles: !0 }));
     } catch (e) {
       if (t.signal.aborted || r !== this.revision) return;
       this.data = void 0, this.state = "error", this.message = e instanceof Error ? e.message : "Could not load data.", this.render(), this.dispatchEvent(new CustomEvent("datatug-error", { detail: { message: this.message }, bubbles: !0 }));
@@ -226,44 +227,46 @@ class J extends $ {
     if (c.type = "button", c.addEventListener("click", () => {
       this.refresh();
     }), e.append(a, c), r.append(e), this.statusNode(t)) return;
-    const n = this.data, l = this.search.toLocaleLowerCase(), o = n.rows.map((p, u) => ({ row: p, index: u })).filter(({ row: p }) => !l || n.columns.some((u) => q(p[u]).toLocaleLowerCase().includes(l)));
+    const o = this.data;
+    if (!o) return;
+    const l = this.search.toLocaleLowerCase(), n = o.rows.map((m, p) => ({ row: m, index: p })).filter(({ row: m }) => !l || o.columns.some((p) => q(m[p]).toLocaleLowerCase().includes(l)));
     if (this.sortColumn) {
-      const p = this.sortColumn;
-      o.sort((u, f) => {
-        const C = u.row[p], w = f.row[p], T = typeof C == "number" && typeof w == "number" ? C - w : q(C).localeCompare(q(w), void 0, { numeric: !0 });
-        return (this.sortDesc ? -T : T) || u.index - f.index;
+      const m = this.sortColumn;
+      n.sort((p, f) => {
+        const C = p.row[m], w = f.row[m], T = typeof C == "number" && typeof w == "number" ? C - w : q(C).localeCompare(q(w), void 0, { numeric: !0 });
+        return (this.sortDesc ? -T : T) || p.index - f.index;
       });
     }
-    const d = Number(this.getAttribute("page-size")), m = Number.isInteger(d) && d > 0 ? Math.min(d, 500) : 50, h = Math.max(1, Math.ceil(o.length / m));
-    this.page = Math.min(this.page, h - 1);
-    const b = o.slice(this.page * m, (this.page + 1) * m), y = i("div");
+    const d = Number(this.getAttribute("page-size")), h = Number.isInteger(d) && d > 0 ? Math.min(d, 500) : 50, u = Math.max(1, Math.ceil(n.length / h));
+    this.page = Math.min(this.page, u - 1);
+    const b = n.slice(this.page * h, (this.page + 1) * h), y = i("div");
     y.className = "scroller";
     const g = i("table"), E = i("thead"), x = i("tr");
-    for (const p of n.columns) {
-      const u = i("th");
-      u.scope = "col";
-      const f = i("button", `${p}${this.sortColumn === p ? this.sortDesc ? " ↓" : " ↑" : ""}`);
+    for (const m of o.columns) {
+      const p = i("th");
+      p.scope = "col";
+      const f = i("button", `${m}${this.sortColumn === m ? this.sortDesc ? " ↓" : " ↑" : ""}`);
       f.type = "button", f.addEventListener("click", () => {
-        this.sortDesc = this.sortColumn === p && !this.sortDesc, this.sortColumn = p, this.page = 0, this.render();
-      }), u.append(f), x.append(u);
+        this.sortDesc = this.sortColumn === m && !this.sortDesc, this.sortColumn = m, this.page = 0, this.render();
+      }), p.append(f), x.append(p);
     }
     E.append(x), g.append(E);
     const A = i("tbody");
-    for (const { row: p, index: u } of b) {
+    for (const { row: m, index: p } of b) {
       const f = i("tr");
-      f.tabIndex = 0, f.setAttribute("aria-selected", String(this.selected === u));
+      f.tabIndex = 0, f.setAttribute("aria-selected", String(this.selected === p));
       const C = () => {
-        this.selected = u, this.render(), this.dispatchEvent(new CustomEvent("datatug-select", { detail: { row: p, index: u, key: n.keys?.[u] }, bubbles: !0 }));
+        this.selected = p, this.render(), this.dispatchEvent(new CustomEvent("datatug-select", { detail: { row: m, index: p, key: o.keys?.[p] }, bubbles: !0 }));
       };
       f.addEventListener("click", C), f.addEventListener("keydown", (w) => {
         (w.key === "Enter" || w.key === " ") && (w.preventDefault(), C());
       });
-      for (const w of n.columns) f.append(i("td", q(p[w])));
+      for (const w of o.columns) f.append(i("td", q(m[w])));
       A.append(f);
     }
     g.append(A), y.append(g), t.append(y);
     const v = i("div");
-    v.className = "footer", v.append(i("span", `${o.length} of ${n.rows.length} rows`));
+    v.className = "footer", v.append(i("span", `${n.length} of ${o.rows.length} rows`));
     const j = i("div");
     j.className = "pager";
     const D = i("button", "Previous");
@@ -271,38 +274,40 @@ class J extends $ {
       this.page--, this.render();
     });
     const S = i("button", "Next");
-    S.disabled = this.page >= h - 1, S.addEventListener("click", () => {
+    S.disabled = this.page >= u - 1, S.addEventListener("click", () => {
       this.page++, this.render();
-    }), j.append(D, i("span", `${this.page + 1} / ${h}`), S), v.append(j), t.append(v);
+    }), j.append(D, i("span", `${this.page + 1} / ${u}`), S), v.append(j), t.append(v);
   }
 }
 class H extends $ {
   render() {
     const t = this.shell("DataTug chart");
     if (this.statusNode(t)) return;
-    const r = this.data, e = this.getAttribute("type") ?? "auto";
+    const r = this.data;
+    if (!r) return;
+    const e = this.getAttribute("type") ?? "auto";
     if (e !== "auto" && e !== "bar") {
       this.message = `Unsupported chart type: ${e}.`, this.state = "error", this.statusNode(t);
       return;
     }
-    const a = r.columns.find((d) => r.rows.some((m) => typeof m[d] == "number")), c = r.columns.find((d) => d !== a);
+    const a = r.columns.find((d) => r.rows.some((h) => typeof h[d] == "number")), c = r.columns.find((d) => d !== a);
     if (!a || !c) {
       this.message = "Chart needs one numeric and one label column.", this.state = "error", this.statusNode(t);
       return;
     }
-    const n = r.rows.slice(0, 20), l = Math.max(0, ...n.map((d) => Number(d[a]) || 0)), o = i("div");
-    o.className = "chart", o.setAttribute("role", "img"), o.setAttribute("aria-label", `Bar chart of ${a} by ${c}`);
-    for (const d of n) {
-      const m = Number(d[a]) || 0, h = i("div");
-      h.className = "bar";
+    const o = r.rows.slice(0, 20), l = Math.max(0, ...o.map((d) => Number(d[a]) || 0)), n = i("div");
+    n.className = "chart", n.setAttribute("role", "img"), n.setAttribute("aria-label", `Bar chart of ${a} by ${c}`);
+    for (const d of o) {
+      const h = Number(d[a]) || 0, u = i("div");
+      u.className = "bar";
       const b = i("span", q(d[c]));
       b.className = "label";
       const y = i("div");
       y.className = "track";
       const g = i("div");
-      g.className = "fill", g.style.width = `${Math.max(0, l ? m / l * 100 : 0)}%`, y.append(g), h.append(b, y, i("span", q(m))), o.append(h);
+      g.className = "fill", g.style.width = `${Math.max(0, l ? h / l * 100 : 0)}%`, y.append(g), u.append(b, y, i("span", q(h))), n.append(u);
     }
-    t.append(o);
+    t.append(n);
   }
 }
 customElements.get("dtql-query") || customElements.define("dtql-query", Q);
