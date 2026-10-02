@@ -30,6 +30,15 @@ The complete PostgreSQL, MySQL, and SQL Server SQL files are distributed
 unchanged from the same upstream revision. Per-table SQL is generated as
 portable SQLite-compatible `CREATE TABLE` plus `INSERT` statements.
 
+`public/data/metadata/checksums.json` lists every other published data file with
+its SHA-256 and size in bytes, sorted by path. The generator writes it last,
+from the bytes on disk; `pnpm validate` fails if any file differs from it.
+`pnpm test:data` pins `json/chinook.Invoice.json` (SHA-256 `88eb7fae…c373c`,
+115,781 bytes, 412 rows) and tests the checksum code and the drift guard. In CI
+the guard (`pnpm check:drift <base>`) fails a change that touches published
+data without also regenerating the checksums file and changing something under
+`data-source/` (a new input, or a dated line in its revision history).
+
 Public URLs follow this stable convention:
 
 ```text

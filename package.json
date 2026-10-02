@@ -10,6 +10,8 @@
     "preview": "astro preview",
     "check": "astro check",
     "validate": "node scripts/validate-data.mjs",
+    "test:data": "node --test scripts/test-data.mjs",
+    "check:drift": "node scripts/check-data-drift.mjs",
     "test:worker": "node --import tsx/esm scripts/test-worker.ts"
   },
   "dependencies": {

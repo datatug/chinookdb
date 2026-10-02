@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { parse as parseYaml } from 'yaml';
+import { checksumsPath, verifyChecksums } from './lib/checksums.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const model = JSON.parse(await readFile(join(root, 'src', 'data', 'schema.json'), 'utf8'));
@@ -29,4 +30,9 @@ if (!artist || artist.Name !== 'AC/DC') throw new Error('SQLite query validation
 db.close();
 const files = await readdir(join(out, 'json'));
 if (files.length !== expected.length) throw new Error('Expected one JSON file per table');
-console.log(`Validated ${expected.length} tables, cross-format row counts, and SQLite query`);
+const checksums = JSON.parse(await readFile(join(out, checksumsPath), 'utf8'));
+const checksumProblems = await verifyChecksums(out, checksums);
+if (checksumProblems.length > 0) throw new Error(`Checksums do not match the published data (run pnpm generate):\n${checksumProblems.join('\n')}`);
+const sourceNote = await readFile(join(root, 'data-source', 'README.md'), 'utf8');
+if (!sourceNote.includes(checksums.source.sqliteSha256)) throw new Error('data-source/README.md does not record the SQLite SHA-256 named in the checksums file');
+console.log(`Validated ${expected.length} tables, cross-format row counts, SQLite query, and ${Object.keys(checksums.files).length} file checksums`);
