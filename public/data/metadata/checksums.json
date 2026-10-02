@@ -1,0 +1,216 @@
+{
+  "algorithm": "sha256",
+  "note": "Paths are relative to /data/. This file lists every other published data file with its SHA-256 and size in bytes.",
+  "source": {
+    "repository": "https://github.com/lerocha/chinook-database",
+    "revision": "7f67772503d71ba90f19283c38e93923addb43fa",
+    "sqlitePath": "data-source/Chinook_Sqlite.sqlite",
+    "sqliteSha256": "7651ba378ac2fcd0dfc3c66fb101f7a7eed3ba39a612ec642b96e20702061f15"
+  },
+  "files": {
+    "chinook.json": {
+      "sha256": "268b5cac2375ad24e39d3105d06b1fe9179b70a21fd8b7ed09b60fb0a49e974e",
+      "bytes": 1900157
+    },
+    "chinook.mysql.sql": {
+      "sha256": "68768623bac1fe6f92c317235735c706a54a28cc76ab175c194e99f994dadbd6",
+      "bytes": 600574
+    },
+    "chinook.postgresql.sql": {
+      "sha256": "e3fde5c1a5b51a2a91429a702c9ca6e69ba56e6c7f5e112724d70c3d03db695e",
+      "bytes": 600200
+    },
+    "chinook.sqlite": {
+      "sha256": "7651ba378ac2fcd0dfc3c66fb101f7a7eed3ba39a612ec642b96e20702061f15",
+      "bytes": 1007616
+    },
+    "chinook.sqlserver.sql": {
+      "sha256": "5ea75c9e925ead917d3fabea6ed3cc8c1ff1d036b61e915c94631aafa2b0802b",
+      "bytes": 601344
+    },
+    "chinook.yaml": {
+      "sha256": "2adec942f3c76600f258674585a1e5750dc7320aecdfc4bce827450d4cdfd8e6",
+      "bytes": 1362200
+    },
+    "csv/chinook.Album.csv": {
+      "sha256": "7339f2504f6096e3621acab5bc0b5b4b02a9ffcedeaefb01d8249a20f33fdfd3",
+      "bytes": 10816
+    },
+    "csv/chinook.Artist.csv": {
+      "sha256": "f891d9c3a3c5148fabc4001987944a0481faf3211c992c1d12c77a3c13203b70",
+      "bytes": 7016
+    },
+    "csv/chinook.Customer.csv": {
+      "sha256": "214fcc549b0c675884a7f812d5618063bc70362a754ec8b1db752d7067771636",
+      "bytes": 6737
+    },
+    "csv/chinook.Employee.csv": {
+      "sha256": "a63a6d3f2802efe9358f6017b41420789b913d2e1986d9ee09942e576cf1e855",
+      "bytes": 1522
+    },
+    "csv/chinook.Genre.csv": {
+      "sha256": "d56b3c1f0bc3b84e82babc7544f0bb71c36ef4de98695c4f0bc2e8872ab1615b",
+      "bytes": 328
+    },
+    "csv/chinook.Invoice.csv": {
+      "sha256": "dffc4c38c116361518f9a3958168164dad5bfa787d1568a66d8fd61ec63fc517",
+      "bytes": 31590
+    },
+    "csv/chinook.InvoiceLine.csv": {
+      "sha256": "59708ed1db5058dc636101e442083980e6892fb2dddd93a5953601892998abfe",
+      "bytes": 44673
+    },
+    "csv/chinook.MediaType.csv": {
+      "sha256": "1a8cedb7a35d6b8a8cfdac467d02da1b1dfa8ac7dde87aa199ed4c03a59bf550",
+      "bytes": 136
+    },
+    "csv/chinook.Playlist.csv": {
+      "sha256": "63932576edbd259b544915f364471d83009335701c5d74ad074f157968228346",
+      "bytes": 298
+    },
+    "csv/chinook.PlaylistTrack.csv": {
+      "sha256": "63c474837f074228cad937b4d6f91a6c2c7cb0885e42f5244b182687b4df450f",
+      "bytes": 58707
+    },
+    "csv/chinook.Track.csv": {
+      "sha256": "493e8ef7aa98665e537e8ba8c263835fde531ef6b9709ed4496544890fee6871",
+      "bytes": 241803
+    },
+    "json/chinook.Album.json": {
+      "sha256": "75a013f41773393fcff58bc2fc120b3efa6b88a1d62094d4d0930d63f4aa572f",
+      "bytes": 30525
+    },
+    "json/chinook.Artist.json": {
+      "sha256": "6cb3dd3a5698a5d61af27fdc5b801bbfbd1f66e9f71b51ef7945bcaf87fffc53",
+      "bytes": 17963
+    },
+    "json/chinook.Customer.json": {
+      "sha256": "0f16fb0e608d9310445c02a106688bde714e749d7234d89d268dc3daf1dd65c7",
+      "bytes": 20966
+    },
+    "json/chinook.Employee.json": {
+      "sha256": "762a76861c15a4c5faf2f6e45dfe678e9474d2fdde8897425dbaed3749dcf3fd",
+      "bytes": 3594
+    },
+    "json/chinook.Genre.json": {
+      "sha256": "59fa7fc1ce25ec681238158e04318c3fb51e9bc79b5186250fd291f26cb95114",
+      "bytes": 1293
+    },
+    "json/chinook.Invoice.json": {
+      "sha256": "88eb7faede360988e9c0f8f8d107e5093db5e712141de14d868f8947b43c373c",
+      "bytes": 115781
+    },
+    "json/chinook.InvoiceLine.json": {
+      "sha256": "7a4d15811c5e0553609bb5c67e1240fde8e784052f5cdbeecc470e9d9e3e6544",
+      "bytes": 266385
+    },
+    "json/chinook.MediaType.json": {
+      "sha256": "73d2eaf8406780565ec34e7498d90b94a6de89396a4161f6e9c2152f8aea245c",
+      "bytes": 337
+    },
+    "json/chinook.Playlist.json": {
+      "sha256": "a5b7de153f5cc0c38d2ee50845b6f9098b25f111026e43fa22c3a1470088a54b",
+      "bytes": 1041
+    },
+    "json/chinook.PlaylistTrack.json": {
+      "sha256": "befe54115ddd8cc6ec65c48e43a1ae1233ff5a1d17939f28075662e7379a9735",
+      "bytes": 433436
+    },
+    "json/chinook.Track.json": {
+      "sha256": "ab753372c31a8bbacf435d5ce25797ba2478c2cfff6004d3bd2cb7e1e87e0669",
+      "bytes": 813343
+    },
+    "metadata/source.json": {
+      "sha256": "9f15c4ae7fc50bca13cfeec3b1116b43698a7f6363dc4ec09e81b8497f683ecf",
+      "bytes": 177
+    },
+    "sql/chinook.Album.sql": {
+      "sha256": "501c62e940ba2ca004edcd56e18b0992acc6c9f7c1e0218247d0472ee53b28cb",
+      "bytes": 34267
+    },
+    "sql/chinook.Artist.sql": {
+      "sha256": "444e18dcfef2e275f1d1cc3e727c61b41daf187cf636e1cf5ed17cd60d1a40d0",
+      "bytes": 22316
+    },
+    "sql/chinook.Customer.sql": {
+      "sha256": "5f0862e463c16aad744b7bc6705764049368dc5ca8185f5f2558bf87fad07a3e",
+      "bytes": 19907
+    },
+    "sql/chinook.Employee.sql": {
+      "sha256": "6788d8ba6a2d6d0d129ec5a3b5ae49230815b77ecf0dfb6c33bf80d8709ba21a",
+      "bytes": 3880
+    },
+    "sql/chinook.Genre.sql": {
+      "sha256": "aa8fe13dc432e27b63e3c081c2488261648aa315ecc5524c9996fd7a6fd6e084",
+      "bytes": 1859
+    },
+    "sql/chinook.Invoice.sql": {
+      "sha256": "976ebaf8d37e83a805f5cc4d0e1c3b3fcc7b0bf808fa317c8ceb1a3633bbc62a",
+      "bytes": 111300
+    },
+    "sql/chinook.InvoiceLine.sql": {
+      "sha256": "83c30b23c7619f4d6a40a7980104caa8a430df35619adc5b4872d471fa4f7743",
+      "bytes": 284646
+    },
+    "sql/chinook.MediaType.sql": {
+      "sha256": "413a9d0f9b1c7d4b9c4d95923eabed6a671333433594218b753f73bf2b12adad",
+      "bytes": 655
+    },
+    "sql/chinook.Playlist.sql": {
+      "sha256": "cb96698abdc3dfdbef28a267a7a64aa84abd4338e6268e418407c3e98b527894",
+      "bytes": 1572
+    },
+    "sql/chinook.PlaylistTrack.sql": {
+      "sha256": "5d9575d0e73b6685926e28c21a91c30ea46964fd982d4c9b880cc4512c854277",
+      "bytes": 625436
+    },
+    "sql/chinook.Track.sql": {
+      "sha256": "867e29ebdbe8d871a8743c837b14891e788948b6eda468d579b949481e7e97ae",
+      "bytes": 764934
+    },
+    "yaml/chinook.Album.yaml": {
+      "sha256": "92d02c2c21c0d11c369f7a69debfd5ae92b05eccc38cdd83ce5d6b0d593aec90",
+      "bytes": 21993
+    },
+    "yaml/chinook.Artist.yaml": {
+      "sha256": "e494d15238acf99776d540e5bc8eb05b0cd8a1b17e7986d15c3a7755a3ac70f3",
+      "bytes": 12460
+    },
+    "yaml/chinook.Customer.yaml": {
+      "sha256": "ffabf599cdadaff32ec8a44722a2dc9f0154cc705aaca293f27e362c88cdb4a9",
+      "bytes": 15686
+    },
+    "yaml/chinook.Employee.yaml": {
+      "sha256": "e998ab5a275bd0625c85eeb0dbfd5401b393f5e5d672b19b8f8308ca918448c1",
+      "bytes": 2719
+    },
+    "yaml/chinook.Genre.yaml": {
+      "sha256": "fe5e65493b01148423ca450b02c890b3dc1f1cd9ea4e4d19ae91f925299d12db",
+      "bytes": 790
+    },
+    "yaml/chinook.Invoice.yaml": {
+      "sha256": "26f715a90ff99a81b06022b031faf54173c58cbd70706072b3b74d9537869eee",
+      "bytes": 89932
+    },
+    "yaml/chinook.InvoiceLine.yaml": {
+      "sha256": "9d38a39ea4405dec2e79ecf58c57d426a61c7016570482eeaf3ce261b3c13986",
+      "bytes": 192462
+    },
+    "yaml/chinook.MediaType.yaml": {
+      "sha256": "581c39390e0fba014f7377bea3adba06d0c23b9ee3c325a9f517df0fd0471384",
+      "bytes": 234
+    },
+    "yaml/chinook.Playlist.yaml": {
+      "sha256": "130ddd692ee752b316abc62531d5e62645df6f5b10ddf105879b427780cf1aee",
+      "bytes": 678
+    },
+    "yaml/chinook.PlaylistTrack.yaml": {
+      "sha256": "dc3327a3ea24d92506efc82aeabe666b6045504f2d226ee19b4a6f4783fddb84",
+      "bytes": 276563
+    },
+    "yaml/chinook.Track.yaml": {
+      "sha256": "d86bc682deec243087416caa45c6c67698c1c2b924a6a29ad81cac31fcd1a48c",
+      "bytes": 615698
+    }
+  }
+}

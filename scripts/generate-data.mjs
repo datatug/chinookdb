@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { stringify as yaml } from 'yaml';
+import { buildChecksums, checksumsPath, serializeChecksums, sha256Hex } from './lib/checksums.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const source = join(root, 'data-source', 'Chinook_Sqlite.sqlite');
@@ -96,5 +97,8 @@ const dialectFiles = [
 ];
 for (const [input, output] of dialectFiles) await copyFile(join(root, 'data-source', 'sql', input), join(out, output));
 await writeFile(join(out, 'metadata', 'source.json'), `${JSON.stringify({ repository: sourceRepository, revision: sourceRevision, sqlitePath: 'data-source/Chinook_Sqlite.sqlite' }, null, 2)}\n`);
+// Written last, from the bytes now on disk, so it describes exactly what is published.
+const checksums = await buildChecksums(out, { repository: sourceRepository, revision: sourceRevision, sqlitePath: 'data-source/Chinook_Sqlite.sqlite', sqliteSha256: sha256Hex(await readFile(source)) });
+await writeFile(join(out, checksumsPath), serializeChecksums(checksums));
 db.close();
 console.log(`Generated ${tables.length} tables from ${sourceRepository}@${sourceRevision}`);
