@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import worker from '../src/worker.ts';
+import { catalogues } from '../src/data/catalogues.ts';
 
 const root = join(fileURLToPath(new URL('.', import.meta.url)), '..');
 const wrangler = JSON.parse(await readFile(join(root, 'wrangler.jsonc'), 'utf8')) as { assets: { run_worker_first: string[] } };
@@ -65,6 +66,21 @@ assert.match(modelPageText, /chinook\.meaning\.yaml/);
 assert.doesNotMatch(modelPageText, /vendor/, 'the model page no longer points at a vendored copy');
 assert.match(modelPageText, /https:\/\/github\.com\/meaninggraph\/core\/tree\/[0-9a-f]{40}/, 'the model page links the pinned commit of meaninggraph/core');
 assert.equal((await request('/model/missing.yaml')).status, 404);
+
+// Where Chinook is listed: the three catalogues are linked from the home page and the model page.
+assert.deepEqual(catalogues.map((catalogue) => catalogue.url), [
+  'https://directory.openvaultdb.com/databases/chinook/',
+  'https://modelspec.org/registry/models/chinook/',
+  'https://meaninggraph.io/graphs/chinook/',
+]);
+for (const path of ['/', '/model/']) {
+  const html = await (await request(path)).text();
+  assert.match(html, /Where Chinook is listed/, `${path} has the block`);
+  for (const { name, url } of catalogues) {
+    assert.equal(html.split(`href="${url}"`).length - 1, 1, `${path} links ${name} once, at ${url}`);
+    assert.match(html, new RegExp(`<strong>${name}</strong>`), `${path} names ${name}`);
+  }
+}
 
 const discovery = await request('/.well-known/openvaultdb');
 assert.equal(discovery.status, 200);

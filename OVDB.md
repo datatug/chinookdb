@@ -14,11 +14,14 @@ files named here are published.
 live deployment, the ModelSpec model, the MeaningGraph meaning file, the
 publisher and the licences.
 
+An optional top-level `homepage` is the publisher's own page for the database,
+a public https URL; the Directory shows it as Website on the database's page.
+
 A manifest names its ModelSpec model in one of two ways: by local files
 (`model.modelspec` and `model.hcl`), or, when the model lives in another
-repository, by `model.address` pinned with `?ref=<40 hex>` (the Directory does
-not read that form yet; it still needs local model files). This repository
-carries both: its own files and the model's address,
-`modelspec://github.com/datatug/chinookdb/chinook`, with no ref because the
-files are in the same repository. The manifest format is a draft
-(`ovdb-manifest/draft-1`).
+repository, by `model.address` pinned with `?ref=<40 hex>` and no local files
+(the Directory accepts both forms; see [`examples/hoster/`](examples/hoster/)).
+This repository carries its own files and the model's address,
+`modelspec://github.com/datatug/chinookdb/chinook`, registered in the ModelSpec
+registry, with no ref because the files are in the same repository. The
+manifest format is a draft (`ovdb-manifest/draft-1`).

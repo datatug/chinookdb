@@ -190,7 +190,10 @@ ignored file is refused, because the Directory reads the published commit.
 `ovdb.yaml` states:
 
 - the canonical identity, `https://chinookdb.com/ovdb/dbs/chinook`, which stays
-  the same if the database moves;
+  the same if the database moves, and the optional `homepage`,
+  `https://chinookdb.com/`, this site, which the OVDB Directory shows as Website
+  on the database's page (either form of manifest may have it: a public https
+  URL, not necessarily on the canonical URL's origin);
 - the deployment: the live URL at `cloud.openvaultdb.com`, the engine
   (`sqlite`), the discovery document on the canonical URL's own site (the one
   that lists the canonical URL), and `recordset_page`, a URL template with
@@ -199,7 +202,8 @@ ignored file is refused, because the Directory reads the published commit.
 - the ModelSpec model, named by local files (`model.modelspec`, the JSON, and
   `model.hcl`, the source; both are required together) and by the address
   `model.address`, `modelspec://github.com/datatug/chinookdb/chinook`, the
-  model's address in the ModelSpec registry (see "The model address" below);
+  model's address in the ModelSpec registry (see "The two forms of a manifest"
+  and "The model address" below);
 - the meaning file, and the MeaningGraph address
   `meaning://github.com/datatug/chinookdb`, which must match the repository and
   the meaning file's own `id`;
@@ -212,7 +216,9 @@ ignored file is refused, because the Directory reads the published commit.
 The manifest holds no secrets and claims no capabilities; what the server can
 do comes from its own discovery document. The check refuses unknown keys, URLs
 that are not https, URLs with credentials, a query string or a fragment, and
-URLs that name an IP address or a local host.
+URLs that name an IP address or a local host. `pnpm check:ovdb` runs it on
+this repository's `HEAD`; `pnpm test:model` runs it too, and the negative
+cases for both forms.
 
 The manifest check fails when `OVDB.md` does not parse, when a file named in
 `OVDB.md` or `ovdb.yaml` is missing or is not a tracked regular file, when
@@ -220,8 +226,11 @@ The manifest check fails when `OVDB.md` does not parse, when a file named in
 `.modelspec.hcl` file, or is not the path in the meaning file's `models:`
 entry, which is where the Directory takes the model's path from), when a licence
 is not one of the known SPDX ids the checker lists, when `recordset_page` has a
-placeholder other than `{name}`, or when the recordsets are not exactly the
-ModelSpec entities.
+placeholder other than `{name}`, when the model file is not a ModelSpec (valid
+JSON such as `null` or `0` included: it must be an object with a module name and
+entities), or when the recordsets are not exactly the ModelSpec entities (for a
+shared model, which the checker cannot read, when a recordset name is not an
+entity name or is listed twice).
 
 What `pnpm test:model` reads, and from where:
 
@@ -238,32 +247,93 @@ What `pnpm test:model` reads, and from where:
 - The other tests in the file (generated files, checksums, the meaning checks)
   read the working tree.
 
+### The two forms of a manifest
+
+The OVDB Directory accepts a manifest in one of two forms, and the checker
+(`scripts/lib/ovdb-manifest.mjs`) accepts exactly those two, with the same rules
+and the same refusals. The forms never mix: a manifest with local model files
+(`model.modelspec` or `model.hcl`) is an own-model manifest, any other is a
+shared-model manifest.
+
+**Own model.** The model and the meaning file are tracked files of the
+publisher's repository, as here: `model.modelspec`, `model.hcl`, `meaning.file`,
+`meaning.graph.id`, `meaning.graph.address` and all three `licences`.
+`model.address` is optional; when given it is the model's address in the
+ModelSpec registry, and for a manifest with its own files it is its own
+repository plus the module name the model file declares, without `?ref=`.
+`meaning.address` and `recordsets_partial` are refused. The checker reads
+everything and checks it all: the recordsets are exactly the model's entities,
+`model.hcl` is the meaning file's `models:` entry, the graph id is the meaning
+file's own.
+
+**Shared model.** The model and the meaning graph are published in other
+repositories, and the manifest points at them instead of copying them, so that
+every hoster of the same model is a database of that model: no local model files
+and no local meaning file, `model.address` and `meaning.address` both pinned with
+`?ref=<40 hex>`, `meaning.file` (a path in the graph's repository),
+`meaning.graph.id` (the MeaningGraph registry id), `licences.data`, the
+`recordsets`, and optionally `licences.model`, `licences.meaning`,
+`recordsets_partial: true` (the recordsets are a subset of the model's entities)
+and `model.name`. Neither address may name the publisher's own repository. See
+[`examples/hoster/`](examples/hoster/) for a complete one.
+
+The checker is offline. For the shared form it validates shape only: it cannot
+read the model or the graph, so the Directory checks both addresses against the
+ModelSpec registry (`github.com/modelspec-org/registry`) and the MeaningGraph
+registry (`github.com/meaninggraph/registry`), reads both repositories at the
+pinned commits and compares the recordsets with the model's entities. The check
+says so in its output (`pnpm check:ovdb` prints a note after a shared manifest).
+
+**One grammar for names**, the same in the checker, the registries and the
+Directory:
+
+- the host of an address is `github.com`;
+- an organisation or a repository is `[A-Za-z0-9_.-]+`, is not `.` or `..`, and a
+  repository does not end in `.git` (in any case), so `.github` is a repository
+  name;
+- in an address the host, the organisation and the repository are written in
+  lower case (GitHub does not tell the cases apart, the registries do), so a
+  publisher whose repository is `DataTug/ChinookDB` writes
+  `modelspec://github.com/datatug/chinookdb/<module>`;
+- a module name is a letter followed by letters, digits and `_`, with upper case
+  allowed and case-sensitive (`Sales` and `sales` are two modules), never with a
+  dot, because `<address>.<Entity>` is an entity reference;
+- a pin is `?ref=` and 40 lower-case hex characters, nothing else after it.
+
 ### The model address
 
-A manifest names its model one of two ways. By **local files**
-(`model.modelspec` and `model.hcl`), as here. Or by `model.address`, pinned
-with `?ref=<40 hex>`, when the model lives in another repository: a different
-hoster's repository would point at the shared Chinook model instead of copying
-it, and have no model files of its own. `model.address` is
-`modelspec://github.com/<org>/<repository>/<module>`, optionally followed by
-`?ref=<40 hex>`, and nothing else.
-
-The address-only form is the intended way for another hoster to reuse a
-published model, but it is not usable yet: the OVDB Directory still needs local
-model files and does not read `model.address`, and a manifest must still carry
-its own meaning file. Today the checker only accepts the form.
-
-This repository carries both: the local files, plus the address of the model
-in the ModelSpec registry (`github.com/modelspec-org/registry`; its
-registration of `chinook` is in review there). Because the model is in this
-same repository the address carries no `?ref=`, and the checker requires it to
-be this repository plus the module name the model file declares. Without local
-files the checker requires `?ref=`.
+This repository carries the own-model form: its local files, plus the address of
+the model in the ModelSpec registry (`github.com/modelspec-org/registry`, where
+`chinook` is registered at commit `8c9e62e`; the MeaningGraph registry and the
+OVDB Directory pin the same commit). The Directory reads `model.address` and
+copies it into its index, so that databases that share an address are databases
+of the same model. Because the model is in this same repository the address
+carries no `?ref=`, and the checker requires it to be this repository plus the
+module name the model file declares.
 
 The registry address is the repository plus the module name:
 `modelspec://github.com/datatug/chinookdb/chinook`. The model's own
 `module.id` is different, `github.com/datatug/chinookdb/model/chinook`, because
 it includes the `model/` directory the files are in. They name the same model.
+
+### Hosting your own copy of Chinook
+
+Someone who hosts their own copy of Chinook lists it in the Directory without
+copying the model or the meaning graph. Their repository carries only two files,
+[`examples/hoster/OVDB.md`](examples/hoster/OVDB.md) and
+[`examples/hoster/ovdb.yaml`](examples/hoster/ovdb.yaml), at its root. The
+example is a shared-model manifest that points at this repository's model and
+meaning graph at the pinned commit `8c9e62e` (which the ModelSpec registry, the
+MeaningGraph registry and the Directory all pin) and whose canonical and
+deployment URLs, publisher and id are placeholders on `example.com`, marked
+`PLACEHOLDER` in the file. To list a database: copy the two files, replace the
+placeholders, commit, check them offline with `node scripts/check-ovdb-manifest.mjs
+--repository https://github.com/<you>/<repository> <directory>` (it needs the
+repository to have the files committed: it reads `HEAD`), and open a pull request
+to [`openvaultdb/directory`](https://github.com/openvaultdb/directory) that adds
+one record for the database (repository, commit, manifest path, canonical URL
+and MeaningGraph id `chinook`). The Directory then checks the addresses against
+the two registries and reads both repositories at the pins.
 
 ## DataTug Embed and DTQL
 

@@ -10,6 +10,7 @@
 // to the entity of its target concept); and values must cover the data they
 // describe.
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { cleanGitEnv } from './git-env.mjs';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -121,32 +122,55 @@ const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 
 // fetched anew; `release` then does nothing. Any other ref, or no cacheDir,
 // uses a temporary clone that `release` removes (in `tempDir`). A failed fetch
 // is retried (`retries` attempts, a growing pause between them) and never
-// leaves a clone behind. Two processes filling the same cache entry both end
-// up with the same verified directory. `run(command, args)` runs git; tests
-// replace it.
+// leaves a clone behind.
+//
+// Several processes may fill and read one cache entry at the same time (the
+// suite runs in parallel on a developer's machine, and CI shards share a
+// cache). A checkout is always made in a private directory and renamed into
+// place, which is atomic: the loser of the rename uses the winner's directory.
+// An entry that is already the commit is only read (git is told not to take
+// optional locks), so readers never disturb each other; only an entry that
+// has to be repaired is written to, and a git failure while doing so (another
+// process holds the index lock) is looked at again before the entry is
+// condemned. A condemned entry is renamed away before it is removed, so no
+// process ever deletes a directory another one is filling. `run(command, args)`
+// runs git; tests replace it.
 export function checkoutGit(url, ref, { cacheDir, tempDir = tmpdir(), run = defaultRun, retries = 3, retryDelayMs = 1000 } = {}) {
   const git = (dir, ...args) => run('git', ['-C', dir, ...args]);
-  // Makes `dir` exactly the commit `expected` again; false when it cannot be
-  // trusted. git is pointed at dir/.git explicitly, so that a directory that is
-  // not a repository of its own (inside the cache, inside the project's own
+  // git is pointed at dir/.git explicitly, so that a directory that is not a
+  // repository of its own (inside the cache, inside the project's own
   // repository) is never reset or cleaned by mistake.
+  const own = (dir, ...args) => run('git', ['--git-dir', join(dir, '.git'), '--work-tree', dir, ...args]);
+  // Read only: dir is exactly the commit (no change, no untracked or ignored file, no hidden index flag).
+  const exact = (dir) => own(dir, '--no-optional-locks', 'status', '--porcelain').trim() === ''
+    && own(dir, 'ls-files', '--others').trim() === ''
+    && own(dir, 'ls-files', '-v').split('\n').filter(Boolean).every((line) => line.startsWith('H '));
+  // Makes `dir` exactly the commit `expected` again; false when it cannot be trusted.
   const pristine = (dir, expected) => {
-    try {
-      if (!statSync(join(dir, '.git')).isDirectory()) return false;
-      const own = (...args) => run('git', ['--git-dir', join(dir, '.git'), '--work-tree', dir, ...args]);
-      if (own('rev-parse', 'HEAD').trim() !== expected) return false;
-      own('read-tree', '--reset', '-u', 'HEAD');
-      own('checkout-index', '--all', '--force');
-      own('clean', '-ffdxq');
-      return own('status', '--porcelain').trim() === ''
-        && own('ls-files', '--others').trim() === ''
-        && own('ls-files', '-v').split('\n').filter(Boolean).every((line) => line.startsWith('H '));
-    } catch { return false; }
+    try { if (!statSync(join(dir, '.git')).isDirectory()) return false; } catch { return false; }
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        if (own(dir, 'rev-parse', 'HEAD').trim() !== expected) return false;
+        if (exact(dir)) return true;
+        own(dir, 'read-tree', '--reset', '-u', 'HEAD');
+        own(dir, 'checkout-index', '--all', '--force');
+        own(dir, 'clean', '-ffdxq');
+        if (exact(dir)) return true;
+      } catch { /* git failed, most likely on another process's lock: look again */ }
+      if (attempt < 3) pause(100 * attempt);
+    }
+    return false;
+  };
+  const discard = (dir, parent) => {
+    // Renamed away first: a process that is reading or filling `dir` is never deleted under.
+    const aside = join(parent, `.discard-${process.pid}-${randomUUID()}`);
+    try { renameSync(dir, aside); } catch { /* gone already: someone else discarded it */ }
+    rmSync(aside, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   };
   const kept = cacheDir && commit.test(ref) ? join(cacheDir, ref) : null;
   if (kept && existsSync(kept)) {
     if (pristine(kept, ref)) return { dir: kept, release() {} };
-    rmSync(kept, { recursive: true, force: true });
+    discard(kept, cacheDir);
   }
   const parent = kept ? cacheDir : tempDir;
   mkdirSync(parent, { recursive: true });

@@ -11,6 +11,11 @@
 # installed binary to use that instead.
 set -euo pipefail
 
+# git sets GIT_DIR, GIT_INDEX_FILE and more for a hook it runs from a linked worktree. Every git call here
+# (and every one the specscore CLI makes) must act on the throwaway tree, never on the repository of the hook,
+# so no inherited GIT_* variable is kept.
+while IFS= read -r name; do unset "$name"; done < <(compgen -e | grep '^GIT_' || true)
+
 version=0.54.2
 root="$(cd "$(dirname "$0")/.." && pwd)"
 work="$(mktemp -d)"
