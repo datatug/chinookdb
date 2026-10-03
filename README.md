@@ -177,6 +177,44 @@ clients that saved the old connection URL. Legacy `/ovdb/v1/` paths redirect to
 cloud `/v1/` paths, except the former static-JSON `GET /query?q=...` shape,
 which returns 410 because its query syntax is different.
 
+## OVDB manifest
+
+This repository publishes the Chinook database to the OpenVaultDB Directory.
+The root [`OVDB.md`](OVDB.md) opts the repository in. It lists, by explicit
+path, the manifest files the Directory may read (no globs). [`ovdb.yaml`](ovdb.yaml)
+is the one manifest it lists. The format is a draft (`ovdb-manifest/draft-1`).
+Every path in these two files is relative to the repository root and must be a
+regular file that git tracks; a directory, a symlink, an untracked file or an
+ignored file is refused, because the Directory reads the published commit.
+
+`ovdb.yaml` states:
+
+- the canonical identity, `https://chinookdb.com/ovdb/dbs/chinook`, which stays
+  the same if the database moves;
+- the deployment: the live URL at `cloud.openvaultdb.com`, the engine
+  (`sqlite`), the discovery document on the canonical URL's own site (the one
+  that lists the canonical URL), and `recordset_page`, a URL template with
+  `{name}` where a recordset's name goes, so clients never build the route
+  themselves;
+- the ModelSpec files, the meaning file, and the MeaningGraph address
+  `meaning://github.com/datatug/chinookdb`, which must match the repository and
+  the meaning file's own `id`;
+- the publisher (DataTug) and the licences: `data` (MIT, the upstream Chinook
+  data), `model` (MIT) and `meaning` (CC0-1.0). `licences.data` is the licence
+  the Directory shows for the database;
+- the recordsets, which are the ModelSpec entity names and the collection names
+  the deployment serves.
+
+The manifest holds no secrets and claims no capabilities; what the server can
+do comes from its own discovery document. The check refuses unknown keys, URLs
+that are not https, URLs with credentials, a query string or a fragment, and
+URLs that name an IP address or a local host.
+
+`pnpm test:model` fails when `OVDB.md` does not parse, when a file named in
+`OVDB.md` or `ovdb.yaml` is missing or is not a tracked regular file, or when
+the recordsets are not exactly the ModelSpec entities. It reads git's HEAD, so
+a new file must be committed before the check can see it.
+
 ## DataTug Embed and DTQL
 
 Every `/tables/<Table>/` page loads the framework-neutral DataTug Embed bundle

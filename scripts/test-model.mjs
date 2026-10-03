@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +9,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { listDataFiles, listTrackedFiles, verifyChecksums } from './lib/checksums.mjs';
 import { checkMeaning, checkoutGit, coreRepo, createResolver, effectiveValues, indexConcepts, loadMeaningDir, matchValues, parseConceptRef, parseModelRef, pinsOf, valueCoverageProblems } from './lib/meaning.mjs';
 import { compareModelWithData, parseHcl, toModelspecJson, validateModel } from './lib/modelspec.mjs';
+import { checkOvdbManifest, gitRepoFiles, parseFrontmatter } from './lib/ovdb-manifest.mjs';
 import { buildModelJson, chinookModule, listModelFiles, modelChecksumsPath, modelDir } from './generate-model.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -598,4 +599,150 @@ test('a binding can match stored values by a code instead of by name', () => {
   const alpha2 = new Map(data.Invoice.map((row) => [row.BillingCountry, matchValues(countries, row.BillingCountry)[0].codes.alpha2]));
   const coded = { ...data, Invoice: data.Invoice.map((row) => ({ ...row, BillingCountry: alpha2.get(row.BillingCountry) })) };
   assert.deepEqual(valueCoverageProblems({ local, resolve, data: coded }), []);
+});
+
+// The OpenVaultDB publisher manifest: OVDB.md opts the repository in, ovdb.yaml describes the database.
+// The checks read what git tracks at HEAD, so the negative cases run against a scratch repository
+// that holds copies of the manifest files, a directory, a symlink, and untracked and ignored files.
+const manifestRepository = `https://${selfRepo}`;
+const manifestRepo = (() => {
+  const dir = join(scratch, `manifest-repo-${scratchCount++}`);
+  mkdirSync(join(dir, 'model'), { recursive: true });
+  for (const path of ['OVDB.md', 'ovdb.yaml', 'model/chinook.modelspec.json', 'model/chinook.modelspec.hcl', 'model/chinook.meaning.yaml']) copyFileSync(join(root, path), join(dir, path));
+  symlinkSync('chinook.meaning.yaml', join(dir, 'model', 'link.yaml'));
+  writeFileSync(join(dir, '.gitignore'), 'ignored.json\n');
+  writeFileSync(join(dir, 'ignored.json'), '{}');
+  gitIn(dir, 'init', '-q', '-b', 'main');
+  gitIn(dir, 'add', '.');
+  gitIn(dir, '-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'files');
+  writeFileSync(join(dir, 'untracked.json'), '{}');
+  return dir;
+})();
+const manifestFiles = gitRepoFiles(manifestRepo);
+const manifestProblems = (changes = {}, options = { repository: manifestRepository }) => {
+  const original = {};
+  for (const [path, text] of Object.entries(changes)) {
+    original[path] = readFileSync(join(manifestRepo, path), 'utf8');
+    writeFileSync(join(manifestRepo, path), text);
+  }
+  try {
+    return checkOvdbManifest(manifestFiles, options).join('\n');
+  } finally {
+    for (const [path, text] of Object.entries(original)) writeFileSync(join(manifestRepo, path), text);
+  }
+};
+const manifestDoc = () => parseYaml(read('ovdb.yaml'));
+const withManifest = (change) => {
+  const doc = manifestDoc();
+  change(doc);
+  return manifestProblems({ 'ovdb.yaml': stringifyYaml(doc) });
+};
+const withFrontmatter = (publish, extra = '') => manifestProblems({ 'OVDB.md': `---\novdb: 1\npublish: ${publish}\n${extra}---\n` });
+
+test('OVDB.md and ovdb.yaml in this repository are a valid publisher manifest', () => {
+  // The real files, read from the real repository's HEAD.
+  assert.deepEqual(checkOvdbManifest(gitRepoFiles(root), { repository: manifestRepository }), []);
+  assert.equal(manifestProblems(), '', 'and so are the copies the negative tests start from');
+  const { data } = parseFrontmatter(read('OVDB.md'));
+  assert.deepEqual(data, { ovdb: 1, publish: ['./ovdb.yaml'] });
+  const doc = manifestDoc();
+  assert.equal(doc.url, 'https://chinookdb.com/ovdb/dbs/chinook');
+  assert.equal(doc.deployment.discovery, 'https://chinookdb.com/.well-known/openvaultdb', 'discovery is where the canonical url is listed');
+  assert.deepEqual([...doc.recordsets].sort(), Object.keys(model.entities).sort(), 'recordsets are exactly the ModelSpec entities');
+  assert.deepEqual(doc.licences, { data: 'MIT', model: 'MIT', meaning: meaning.license });
+  assert.equal(doc.meaning.graph.id, meaning.id);
+});
+
+test('a broken OVDB.md fails the manifest check', () => {
+  assert.match(manifestProblems({ 'OVDB.md': '# no frontmatter\n' }), /OVDB.md has no YAML frontmatter/);
+  assert.match(manifestProblems({ 'OVDB.md': '---\novdb: 2\npublish: [./ovdb.yaml]\n---\n' }), /ovdb must be 1/);
+  assert.match(withFrontmatter('[./nope.yaml]'), /publish entry .\/nope.yaml must be a tracked regular file, but it is missing/);
+  assert.match(withFrontmatter('["./*.yaml"]'), /no glob/);
+  assert.match(withFrontmatter('[/etc/passwd]'), /must be a path starting with .\//);
+  assert.match(withFrontmatter('[./../outside.yaml]'), /no glob, no \.\./);
+  assert.match(withFrontmatter('[]'), /publish must list at least one/);
+  assert.match(withFrontmatter('[./ovdb.yaml, ./ovdb.yaml]'), /publish lists .\/ovdb.yaml twice/);
+  assert.match(withFrontmatter('[./ovdb.yaml]', 'token: abc\n'), /unknown frontmatter keys: token/);
+});
+
+test('every file the manifest names must be a regular file that git tracks at HEAD', () => {
+  const naming = (field, path) => withManifest((m) => { const [a, b] = field.split('.'); m[a][b] = path; });
+  assert.match(naming('meaning.file', 'model/missing.meaning.yaml'), /meaning.file names model\/missing.meaning.yaml, which must be a tracked regular file, but it is missing/);
+  assert.match(naming('model.hcl', 'model'), /model.hcl names model, which must be a tracked regular file, but it is directory/);
+  assert.match(naming('model.hcl', 'model/link.yaml'), /model.hcl names model\/link.yaml, .* it is symlink/);
+  assert.match(naming('model.hcl', 'untracked.json'), /untracked.json, .* it is untracked/);
+  assert.match(naming('model.hcl', 'ignored.json'), /ignored.json, .* it is ignored/);
+  assert.match(naming('model.hcl', '/etc/hosts'), /relative to the repository root \(no glob, no \.\., not absolute\)/);
+  assert.match(naming('model.hcl', 'model/*.hcl'), /no glob/);
+  assert.match(naming('model.modelspec', '../outside.json'), /no glob, no \.\./);
+  assert.match(naming('model.modelspec', 'model/chinook.meaning.yaml'), /is not a ModelSpec JSON file/);
+  // A path is relative to the repository root, not to the manifest.
+  assert.match(naming('meaning.file', 'chinook.meaning.yaml'), /meaning.file names chinook.meaning.yaml, .* it is missing/);
+  // The manifest files themselves are held to the same rule.
+  assert.match(withFrontmatter('[./untracked.json]'), /publish entry .\/untracked.json must be a tracked regular file, but it is untracked/);
+  assert.match(withFrontmatter('[./model]'), /but it is directory/);
+});
+
+test('the manifest holds identities and URLs a client can trust, and nothing else', () => {
+  const url = (field, value) => withManifest((m) => { const [a, b] = field.split('.'); if (b) m[a][b] = value; else m[a] = value; });
+  assert.match(withManifest((m) => { delete m.url; }), /url is required/);
+  assert.match(url('url', 'http://chinookdb.com/ovdb/dbs/chinook'), /url must be an https URL/);
+  assert.match(url('url', 'https://user:s3cret@chinookdb.com/ovdb/dbs/chinook'), /url must not carry credentials/);
+  assert.match(url('url', 'https://chinookdb.com/ovdb/dbs/chinook?token=abc123'), /url must not carry a query string or fragment/);
+  assert.match(url('url', 'https://chinookdb.com/ovdb/dbs/chinook#x'), /url must not carry a query string or fragment/);
+  assert.match(url('url', 'https://127.0.0.1/ovdb/dbs/chinook'), /url must name a host, not an IP address/);
+  assert.match(url('url', 'https://169.254.169.254/ovdb/dbs/chinook'), /url must name a host, not an IP address/);
+  assert.match(url('url', 'https://[::1]/ovdb/dbs/chinook'), /url must name a host, not an IP address/);
+  assert.match(url('url', 'https://localhost/ovdb/dbs/chinook'), /url must be a public host/);
+  assert.match(url('url', 'https://metadata.google.internal/ovdb/dbs/chinook'), /url must be a public host/);
+  assert.match(url('url', 'https://chinookdb.com/dbs/chinook'), /url must have an ovdb path segment or an ovdb subdomain/);
+  assert.equal(url('url', 'https://ovdb.example.com/dbs/chinook').includes('url must have'), false, 'an ovdb subdomain is enough');
+  assert.match(url('deployment.url', 'http://cloud.openvaultdb.com/ovdb/dbs/chinook'), /deployment.url must be an https URL/);
+  assert.match(withManifest((m) => { delete m.deployment.engine; }), /deployment.engine is required/);
+  assert.match(withManifest((m) => { m.api_key = 'sk-live-123'; }), /unknown keys: api_key/);
+  assert.match(withManifest((m) => { m.deployment.token = 'abc'; }), /unknown deployment.keys: token/);
+  assert.match(withManifest((m) => { m.meaning.graph.secret = 'abc'; }), /unknown meaning.graph.keys: secret/);
+  assert.match(url('format', 'ovdb-manifest/v9'), /format must be ovdb-manifest\/draft-1/);
+  assert.match(manifestProblems({ 'ovdb.yaml': 'format: [unterminated' }), /ovdb.yaml: is not valid YAML/);
+});
+
+test('discovery is the canonical url\'s own document, and recordset_page is a template on the deployment', () => {
+  const deployment = (field, value) => withManifest((m) => { m.deployment[field] = value; });
+  assert.match(deployment('discovery', 'https://evil.example.com/.well-known/openvaultdb'), /deployment.discovery must be on the origin of url \(https:\/\/chinookdb.com\)/);
+  assert.match(deployment('discovery', 'https://cloud.openvaultdb.com/.well-known/openvaultdb'), /deployment.discovery must be on the origin of url/, 'the cloud document does not list the canonical url');
+  assert.match(deployment('discovery', 'https://chinookdb.com/other'), /deployment.discovery must be https:\/\/chinookdb.com\/.well-known\/openvaultdb/);
+  assert.match(withManifest((m) => { delete m.deployment.discovery; }), /deployment.discovery is required/);
+  assert.equal(withManifest((m) => { delete m.deployment.recordset_page; }), '', 'recordset_page is optional');
+  assert.match(deployment('recordset_page', 'https://cloud.openvaultdb.com/ovdb/dbs/chinook/collections/Customer'), /recordset_page must contain \{name\} exactly once/);
+  assert.match(deployment('recordset_page', 'https://cloud.openvaultdb.com/{name}/{name}'), /recordset_page must contain \{name\} exactly once/);
+  assert.match(deployment('recordset_page', 'https://evil.example.com/collections/{name}'), /recordset_page must be on the origin of deployment.url \(https:\/\/cloud.openvaultdb.com\)/);
+  assert.match(deployment('recordset_page', 'http://cloud.openvaultdb.com/collections/{name}'), /recordset_page must be an https URL/);
+  assert.match(deployment('recordset_page', 'https://cloud.openvaultdb.com/c/{name}?token=abc'), /recordset_page must not carry a query string/);
+});
+
+test('the publisher, the graph and the licences are stated and agree with the repository', () => {
+  assert.match(withManifest((m) => { delete m.publisher.repository; }), /publisher.repository is required/);
+  assert.match(withManifest((m) => { m.publisher.repository = 'http://github.com/datatug/chinookdb'; }), /publisher.repository must be an https URL/);
+  assert.match(withManifest((m) => { m.publisher.repository = 'https://example.com/datatug/chinookdb'; }), /publisher.repository must be https:\/\/github.com\/<owner>\/<repository>/);
+  assert.match(withManifest((m) => { m.publisher.repository = 'https://github.com/other/chinookdb'; }), /publisher.repository must belong to the owner in publisher.url/);
+  assert.match(withManifest((m) => { m.publisher.repository = 'https://github.com/datatug/other'; }), /publisher.repository must be https:\/\/github.com\/datatug\/chinookdb, the repository this manifest is in/);
+  assert.match(withManifest((m) => { m.publisher.url = 'https://example.com/datatug'; }), /publisher.url must be https:\/\/github.com\/<owner>/);
+  assert.match(withManifest((m) => { m.meaning.graph.id = 'not-chinook'; }), /meaning.graph.id is not-chinook but the meaning file's id is "chinook"/);
+  assert.match(withManifest((m) => { m.meaning.graph.address = 'meaning://github.com/someone/else'; }), /meaning.graph.address must be meaning:\/\/github.com\/datatug\/chinookdb, derived from publisher.repository/);
+  assert.match(withManifest((m) => { delete m.licences.data; }), /licences.data is required/);
+  assert.match(withManifest((m) => { m.licences.data = 'see the README'; }), /licences.data must be an SPDX licence id/);
+  assert.match(withManifest((m) => { m.licences.meaning = 'MIT'; }), /licences.meaning is MIT but the meaning file says CC0-1.0/);
+});
+
+test('the recordsets must be exactly the ModelSpec entities', () => {
+  assert.match(withManifest((m) => { m.recordsets.pop(); }), /recordsets lacks ModelSpec entities: Track/);
+  assert.match(withManifest((m) => { m.recordsets.push('Podcast'); }), /not ModelSpec entities: Podcast/);
+  assert.match(withManifest((m) => { m.recordsets.push('Album'); }), /recordsets lists a name twice/);
+  assert.match(withManifest((m) => { m.recordsets = []; }), /recordsets must be a non-empty list/);
+});
+
+test('the data licence is the upstream one: MIT, Copyright Luis Rocha', () => {
+  assert.match(read('data-source/UPSTREAM-LICENSE.md'), /Copyright \(c\) 2008-2024 Luis Rocha/);
+  assert.match(read('data-source/UPSTREAM-LICENSE.md'), /Permission is hereby granted, free of charge/);
+  assert.equal(manifestDoc().licences.data, 'MIT');
 });

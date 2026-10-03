@@ -1,0 +1,60 @@
+# OpenVaultDB publisher manifest for the Chinook sample database.
+# Format: draft. Every path below is relative to the repository root (this file is there too)
+# and must be a regular file tracked by git. No secrets belong here.
+format: ovdb-manifest/draft-1
+id: chinook
+title: Chinook music store
+description: >-
+  The Chinook sample database: a digital music store with artists, albums,
+  tracks, playlists, customers, employees and invoices. Read-only, served from
+  a pinned copy of the upstream SQLite fixture.
+
+# The canonical identity of the database. It stays the same if the deployment moves.
+url: https://chinookdb.com/ovdb/dbs/chinook
+
+deployment:
+  url: https://cloud.openvaultdb.com/ovdb/dbs/chinook
+  engine: sqlite
+  # The discovery document at the origin of the canonical url; it lists that url.
+  discovery: https://chinookdb.com/.well-known/openvaultdb
+  # Where a recordset's page is. Clients use this template and never build the route themselves.
+  recordset_page: https://cloud.openvaultdb.com/ovdb/dbs/chinook/collections/{name}
+
+model:
+  modelspec: model/chinook.modelspec.json
+  hcl: model/chinook.modelspec.hcl
+
+meaning:
+  file: model/chinook.meaning.yaml
+  # Registered as `chinook` in github.com/meaninggraph/registry.
+  graph:
+    id: chinook
+    address: meaning://github.com/datatug/chinookdb
+
+publisher:
+  name: DataTug
+  url: https://github.com/datatug
+  repository: https://github.com/datatug/chinookdb
+
+# licences.data is the licence the Directory shows for the database: the data is the upstream
+# Chinook data (Copyright (c) 2008-2024 Luis Rocha), MIT. The model and the meaning file are
+# this repository's own work.
+licences:
+  data: MIT
+  model: MIT
+  meaning: CC0-1.0
+
+# Recordset names are the ModelSpec entity names, which are also the collection
+# names the deployment serves.
+recordsets:
+  - Album
+  - Artist
+  - Customer
+  - Employee
+  - Genre
+  - Invoice
+  - InvoiceLine
+  - MediaType
+  - Playlist
+  - PlaylistTrack
+  - Track
