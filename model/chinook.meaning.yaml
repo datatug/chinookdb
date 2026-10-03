@@ -111,7 +111,7 @@ concepts:
   - id: list-price
     kind: attribute
     of: track
-    extends: meaning://github.com/meaninggraph/core/price?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
+    extends: meaning://github.com/meaninggraph/core/price?ref=cb97dbcd9e951b00e7d46cb2e0c4e120c24c8db7
     labels:
       en: List price
       ru: Цена трека
@@ -192,7 +192,7 @@ concepts:
 
   - id: customer
     kind: entity
-    extends: meaning://github.com/meaninggraph/core/customer?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
+    extends: meaning://github.com/meaninggraph/core/customer?ref=cb97dbcd9e951b00e7d46cb2e0c4e120c24c8db7
     labels:
       en: Customer
       ru: Клиент
@@ -208,7 +208,7 @@ concepts:
   - id: customer-country
     kind: attribute
     of: customer
-    values-of: meaning://github.com/meaninggraph/core/country?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
+    values-of: meaning://github.com/meaninggraph/core/country?ref=cb97dbcd9e951b00e7d46cb2e0c4e120c24c8db7
     labels:
       en: Customer country
       ru: Страна клиента
@@ -226,7 +226,7 @@ concepts:
 
   - id: employee
     kind: entity
-    extends: meaning://github.com/meaninggraph/core/employee?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
+    extends: meaning://github.com/meaninggraph/core/employee?ref=cb97dbcd9e951b00e7d46cb2e0c4e120c24c8db7
     labels:
       en: Employee
       ru: Сотрудник
@@ -238,7 +238,7 @@ concepts:
   - id: manager
     kind: attribute
     of: employee
-    extends: meaning://github.com/meaninggraph/core/manager?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
+    extends: meaning://github.com/meaninggraph/core/manager?ref=cb97dbcd9e951b00e7d46cb2e0c4e120c24c8db7
     values-of: employee
     labels:
       en: Manager
@@ -269,7 +269,7 @@ concepts:
 
   - id: invoice
     kind: entity
-    extends: meaning://github.com/meaninggraph/core/invoice?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
+    extends: meaning://github.com/meaninggraph/core/invoice?ref=cb97dbcd9e951b00e7d46cb2e0c4e120c24c8db7
     labels:
       en: Invoice
       ru: Счёт
@@ -291,7 +291,7 @@ concepts:
   - id: invoice-date
     kind: dimension
     of: invoice
-    extends: meaning://github.com/meaninggraph/core/date?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
+    extends: meaning://github.com/meaninggraph/core/date?ref=cb97dbcd9e951b00e7d46cb2e0c4e120c24c8db7
     labels:
       en: Invoice date
       ru: Дата счёта
@@ -307,7 +307,7 @@ concepts:
   - id: billing-country
     kind: dimension
     of: invoice
-    values-of: meaning://github.com/meaninggraph/core/country?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
+    values-of: meaning://github.com/meaninggraph/core/country?ref=cb97dbcd9e951b00e7d46cb2e0c4e120c24c8db7
     labels:
       en: Country
       ru: Страна
@@ -331,7 +331,7 @@ concepts:
   - id: invoice-line
     kind: entity
     of: invoice
-    extends: meaning://github.com/meaninggraph/core/invoice-line?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
+    extends: meaning://github.com/meaninggraph/core/invoice-line?ref=cb97dbcd9e951b00e7d46cb2e0c4e120c24c8db7
     labels:
       en: Invoice line
       ru: Строка счёта
@@ -343,7 +343,7 @@ concepts:
   - id: invoice-total
     kind: attribute
     of: invoice
-    extends: meaning://github.com/meaninggraph/core/invoice-total?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
+    extends: meaning://github.com/meaninggraph/core/invoice-total?ref=cb97dbcd9e951b00e7d46cb2e0c4e120c24c8db7
     labels:
       en: Invoice total
       ru: Сумма счёта
@@ -359,7 +359,7 @@ concepts:
   - id: unit-price
     kind: attribute
     of: invoice-line
-    extends: meaning://github.com/meaninggraph/core/unit-price?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
+    extends: meaning://github.com/meaninggraph/core/unit-price?ref=cb97dbcd9e951b00e7d46cb2e0c4e120c24c8db7
     labels:
       en: Unit price
       ru: Цена за единицу
@@ -373,7 +373,7 @@ concepts:
   - id: quantity
     kind: attribute
     of: invoice-line
-    extends: meaning://github.com/meaninggraph/core/quantity?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
+    extends: meaning://github.com/meaninggraph/core/quantity?ref=cb97dbcd9e951b00e7d46cb2e0c4e120c24c8db7
     labels:
       en: Quantity
       ru: Количество
@@ -386,7 +386,7 @@ concepts:
 
   - id: music-sales
     kind: measure
-    extends: meaning://github.com/meaninggraph/core/revenue?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
+    extends: meaning://github.com/meaninggraph/core/revenue?ref=cb97dbcd9e951b00e7d46cb2e0c4e120c24c8db7
     labels:
       en: Music sales
       ru: Продажи музыки
@@ -415,7 +415,7 @@ concepts:
 
   - id: population
     kind: measure
-    extends: meaning://github.com/meaninggraph/core/population?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
+    extends: meaning://github.com/meaninggraph/core/population?ref=cb97dbcd9e951b00e7d46cb2e0c4e120c24c8db7
     source: world-bank-population
     labels:
       en: Population
@@ -433,7 +433,7 @@ concepts:
 
   - id: music-sales-per-capita
     kind: measure
-    extends: meaning://github.com/meaninggraph/core/per-capita?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
+    extends: meaning://github.com/meaninggraph/core/per-capita?ref=cb97dbcd9e951b00e7d46cb2e0c4e120c24c8db7
     labels:
       en: Music sales per million people
       ru: Продажи музыки на миллион человек

@@ -219,6 +219,7 @@ test('every concept reference to meaninggraph/core pins one full commit, and the
   assert.equal(pins.length, 1, `one pin for the repository, got ${JSON.stringify(pins)}`);
   assert.match(pins[0], /^[0-9a-f]{40}$/, 'a pin is a full commit id, never a branch or tag');
   assert.equal(corePin, pins[0]);
+  assert.ok(read('README.md').includes(`\`${corePin}\``), 'the README names the pinned commit in full, so a pin bump updates it too');
   assert.equal(schemaPath, join(coreIndex.dir, 'meaning.schema.json'));
   assert.ok(existsSync(schemaPath), 'the resolver returns the directory of the pinned checkout');
   assert.ok(coreIndex.concepts.has('country') && coreIndex.concepts.has('currency'));
