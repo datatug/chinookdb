@@ -10,7 +10,7 @@
 // to the entity of its target concept); and values must cover the data they
 // describe.
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import Ajv2020 from 'ajv/dist/2020.js';
@@ -66,16 +66,18 @@ export function schemaProblems(doc, schemaPath) {
 }
 
 // Loads every *.meaning.yaml file directly in `dir` (the repository root; subdirectories are not
-// searched) as one repository's concepts. The result also carries `dir`.
-export function loadMeaningDir(dir) {
+// searched) as one repository's concepts. The result also carries `dir` and, when
+// given, the repository's own `address` ({host}/{org}/{repo}): a meaning://
+// reference to that address inside it is a reference to itself, like a bare id.
+export function loadMeaningDir(dir, address) {
   const files = readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isFile() && entry.name.endsWith('.meaning.yaml')).map((entry) => entry.name).sort().map((name) => {
     const path = join(dir, name);
     return { path, doc: parseYaml(readFileSync(path, 'utf8')) };
   });
-  return { ...indexConcepts(files), dir };
+  return { ...indexConcepts(files, address), dir };
 }
 
-export function indexConcepts(files) {
+export function indexConcepts(files, address) {
   const concepts = new Map();
   const problems = [];
   for (const file of files) {
@@ -84,7 +86,7 @@ export function indexConcepts(files) {
       else concepts.set(concept.id, { concept, path: file.path, doc: file.doc });
     }
   }
-  return { files, concepts, problems };
+  return { files, concepts, problems, address };
 }
 
 // Every meaning:// reference written anywhere in a meaning file, parsed.
@@ -110,18 +112,39 @@ const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 
 
 // Fetches `ref` of the git repository at `url` and returns { dir, release }.
 // A full commit id is immutable, so with a `cacheDir` the checkout is kept
-// there under that id (a CI cache may restore it) and reused after a check
-// that it still is that commit with no local changes; `release` then does
-// nothing. Any other ref, or no cacheDir, uses a temporary clone that
-// `release` removes (in `tempDir`). A failed fetch is retried (`retries` attempts, a growing
-// pause between them) and never leaves a clone behind. `run(command, args)`
-// runs git; tests replace it.
+// there under that id (a CI cache may restore it) and reused only after it has
+// been made that commit again: tracked files are rewritten from the commit,
+// every untracked or ignored file is removed (whatever the exclude rules say),
+// and a checkout that still differs (hidden index flags such as
+// assume-unchanged or skip-worktree, a sparse checkout) is thrown away and
+// fetched anew; `release` then does nothing. Any other ref, or no cacheDir,
+// uses a temporary clone that `release` removes (in `tempDir`). A failed fetch
+// is retried (`retries` attempts, a growing pause between them) and never
+// leaves a clone behind. Two processes filling the same cache entry both end
+// up with the same verified directory. `run(command, args)` runs git; tests
+// replace it.
 export function checkoutGit(url, ref, { cacheDir, tempDir = tmpdir(), run = defaultRun, retries = 3, retryDelayMs = 1000 } = {}) {
   const git = (dir, ...args) => run('git', ['-C', dir, ...args]);
-  const headIs = (dir, expected) => { try { return git(dir, 'rev-parse', 'HEAD').trim() === expected && git(dir, 'status', '--porcelain').trim() === ''; } catch { return false; } };
+  // Makes `dir` exactly the commit `expected` again; false when it cannot be
+  // trusted. git is pointed at dir/.git explicitly, so that a directory that is
+  // not a repository of its own (inside the cache, inside the project's own
+  // repository) is never reset or cleaned by mistake.
+  const pristine = (dir, expected) => {
+    try {
+      if (!statSync(join(dir, '.git')).isDirectory()) return false;
+      const own = (...args) => run('git', ['--git-dir', join(dir, '.git'), '--work-tree', dir, ...args]);
+      if (own('rev-parse', 'HEAD').trim() !== expected) return false;
+      own('read-tree', '--reset', '-u', 'HEAD');
+      own('checkout-index', '--all', '--force');
+      own('clean', '-ffdxq');
+      return own('status', '--porcelain').trim() === ''
+        && own('ls-files', '--others').trim() === ''
+        && own('ls-files', '-v').split('\n').filter(Boolean).every((line) => line.startsWith('H '));
+    } catch { return false; }
+  };
   const kept = cacheDir && commit.test(ref) ? join(cacheDir, ref) : null;
   if (kept && existsSync(kept)) {
-    if (headIs(kept, ref)) return { dir: kept, release() {} };
+    if (pristine(kept, ref)) return { dir: kept, release() {} };
     rmSync(kept, { recursive: true, force: true });
   }
   const parent = kept ? cacheDir : tempDir;
@@ -137,8 +160,13 @@ export function checkoutGit(url, ref, { cacheDir, tempDir = tmpdir(), run = defa
       }
     }
     git(work, 'checkout', '-q', 'FETCH_HEAD');
-    if (commit.test(ref) && !headIs(work, ref)) throw new Error(`${url} at ${ref} did not check out that commit`);
-    if (kept && !existsSync(kept)) renameSync(work, kept);
+    if (commit.test(ref) && !pristine(work, ref)) throw new Error(`${url} at ${ref} did not check out that commit`);
+    if (kept) {
+      try { renameSync(work, kept); } catch (error) {
+        // Another process filled the entry first: use its directory once it is verified.
+        if (!['ENOTEMPTY', 'EEXIST'].includes(error.code) || !pristine(kept, ref)) throw error;
+      }
+    }
     done = true;
   } finally {
     if (!done || kept) rmSync(work, { recursive: true, force: true });
@@ -151,7 +179,7 @@ export function checkoutGit(url, ref, { cacheDir, tempDir = tmpdir(), run = defa
 export const defaultCacheDir = (root) => process.env.MEANING_CACHE_DIR || join(root, '.cache', 'meaning-sources');
 
 // Resolves meaning:// repositories through `sources` (see meaningSources) to
-// { dir, files, concepts, problems } or { error }. Call `.dispose()` when done:
+// { dir, files, concepts, problems, address } or { error }. Call `.dispose()` when done:
 // it removes the temporary clones of refs that are not immutable commits.
 export function createResolver({ root, sources = meaningSources, cacheDir = defaultCacheDir(root), run } = {}) {
   const cache = new Map();
@@ -163,11 +191,11 @@ export function createResolver({ root, sources = meaningSources, cacheDir = defa
     const key = `${repo}@${ref ?? ''}`;
     if (!cache.has(key)) {
       try {
-        if (source.dir) cache.set(key, loadMeaningDir(join(root, source.dir)));
+        if (source.dir) cache.set(key, loadMeaningDir(join(root, source.dir), repo));
         else {
           const checkout = checkoutGit(source.git, ref, { cacheDir, run });
           releases.push(checkout.release);
-          cache.set(key, loadMeaningDir(checkout.dir));
+          cache.set(key, loadMeaningDir(checkout.dir, repo));
         }
       } catch (error) {
         cache.set(key, { error: `meaning://${repo}?ref=${ref} cannot be read: ${error.message}` });
@@ -208,12 +236,14 @@ const valueRoles = ['value', 'display-name'];
 const an = (kind) => `${/^[aeiou]/.test(kind) ? 'an' : 'a'} ${kind}`;
 
 // Resolves `ref` as written inside `repo` (a repository index from
-// loadMeaningDir or indexConcepts): bare ids resolve in that repository,
-// meaning:// ones through `resolve`. Returns { concept, repo } or null.
+// loadMeaningDir or indexConcepts): bare ids resolve in that repository, and so
+// does a meaning:// reference to the repository's own address (no ?ref=), the
+// rest through `resolve`. Returns { concept, repo } or null.
 export function resolveConcept(ref, repo, resolve) {
   const parsed = ref && parseConceptRef(ref);
   if (!parsed) return null;
-  const target = parsed.repo ? resolve(parsed.repo, parsed.ref) : repo;
+  const own = !parsed.repo || (parsed.ref === undefined && parsed.repo === repo.address);
+  const target = own ? repo : resolve(parsed.repo, parsed.ref);
   if (!target || target.error) return null;
   const found = target.concepts.get(parsed.id);
   return found ? { concept: found.concept, repo: target } : null;
@@ -245,6 +275,14 @@ export function ratioInput(concept, repo, resolve) {
     }
   }
   return null;
+}
+
+// How a measure's values combine when grouped: its own aggregation, else the
+// nearest one along extends (like unit), else none. Returns { aggregation, from }
+// where `from` is the concept that states it (null when none does).
+export function effectiveAggregation(concept, repo, resolve) {
+  const node = lineage(concept, repo, resolve).find((entry) => entry.concept.measure?.aggregation !== undefined);
+  return node ? { aggregation: node.concept.measure.aggregation, from: node.concept } : { aggregation: 'none', from: null };
 }
 
 // The known values of a concept: its own, or those of the entity named by its
@@ -364,23 +402,23 @@ export function checkMeaning({ local, resolve: resolveOther, schemaPath, models:
         const dimension = lookup(ref, `${where} measure.dimensions`);
         if (dimension && !measureDimensionKinds.includes(dimension.concept.kind)) problems.push(`${where}: measure.dimensions names ${ref}, which is ${an(dimension.concept.kind)}; a measure is grouped by dimensions or attributes only`);
       }
-      const aggregation = concept.measure?.aggregation;
+      // A kind of a measure inherits its aggregation, so a ratio that extends a measure which sums is wrong too.
+      const { aggregation, from } = concept.kind === 'measure' ? effectiveAggregation(concept, local, resolve) : {};
       if (ratioAggregations.includes(aggregation)) {
         const ratio = ratioInput(concept, local, resolve);
-        if (ratio) problems.push(`${where}: aggregation ${aggregation} on a ratio (it is computed from the measure ${ratio}); a ratio is recomputed per group from its inputs, so its aggregation is none`);
+        if (ratio) problems.push(`${where}: aggregation ${aggregation} on a ratio (it is computed from the measure ${ratio}); a ratio is recomputed per group from its inputs, so its aggregation is none${from !== concept ? `; ${aggregation} is inherited from ${from.id}, state aggregation: none` : ''}`);
       }
       if (concept.source && !sourceIds.has(concept.source)) problems.push(`${where}: source ${concept.source} is not declared in sources`);
       const valueIds = new Set();
+      // A word names one value whatever the language: stored values are matched against every language.
       const names = new Map();
       for (const value of concept.values ?? []) {
         if (valueIds.has(value.id)) problems.push(`${where}: value ${value.id} is declared twice`);
         valueIds.add(value.id);
-        for (const language of new Set([...Object.keys(value.labels ?? {}), ...Object.keys(value.aliases ?? {})])) {
-          for (const word of [value.labels?.[language], ...(value.aliases?.[language] ?? [])].filter(Boolean)) {
-            const key = `${language}:${word.toLowerCase()}`;
-            if (names.has(key) && names.get(key) !== value.id) problems.push(`${where}: "${word}" names both ${names.get(key)} and ${value.id}`);
-            names.set(key, value.id);
-          }
+        for (const word of [...Object.values(value.labels ?? {}), ...Object.values(value.aliases ?? {}).flat()]) {
+          const key = word.toLowerCase();
+          if (names.has(key) && names.get(key) !== value.id) problems.push(`${where}: "${word}" names both ${names.get(key)} and ${value.id}`);
+          names.set(key, value.id);
         }
       }
       const entities = entityBindings(concept);

@@ -101,8 +101,9 @@ id into `.cache/meaning-sources/<commit>`, retried on network errors, git-ignore
 and reads the concepts and the schema from the same checkout; the resolver in
 `scripts/lib/meaning.mjs` returns its directory and nothing else names a path
 in it. The commit is immutable, so a checkout kept under its id is reused
-without touching the network after it is verified to still be that commit with
-no local changes; CI caches the directory keyed by the meaning files. Set
+without touching the network once it has been made that commit again (tracked
+files rewritten, every untracked or ignored file removed; a checkout that still
+differs is fetched anew); CI caches the directory keyed by the meaning files. Set
 `MEANING_CACHE_DIR` to keep the cache elsewhere.
 
 `pnpm test:model` checks, and fails CI when:

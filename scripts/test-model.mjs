@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, test } from 'node:test';
-import { parse as parseYaml } from 'yaml';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { listDataFiles, listTrackedFiles, verifyChecksums } from './lib/checksums.mjs';
 import { checkMeaning, checkoutGit, coreRepo, createResolver, effectiveValues, indexConcepts, loadMeaningDir, matchValues, parseConceptRef, parseModelRef, pinsOf, valueCoverageProblems } from './lib/meaning.mjs';
 import { compareModelWithData, parseHcl, toModelspecJson, validateModel } from './lib/modelspec.mjs';
@@ -33,6 +33,25 @@ const clone = (value) => structuredClone(value);
 const check = (doc) => checkMeaning({ local: chinook(doc), resolve, schemaPath, selfRepo });
 const coreUrl = `meaning://${coreRepo}`;
 const coreRef = (id, pin = corePin) => `${coreUrl}/${id}?ref=${pin}`;
+
+// Where the network is not the point, a local git repository stands in for github.com.
+const scratch = mkdtempSync(join(tmpdir(), 'model-meaning-'));
+after(() => rmSync(scratch, { recursive: true, force: true }));
+let scratchCount = 0;
+const gitIn = (dir, ...args) => execFileSync('git', ['-C', dir, ...args], { stdio: 'pipe' }).toString().trim();
+function localOrigin(files) {
+  const dir = join(scratch, `origin-${scratchCount++}`);
+  mkdirSync(dir);
+  gitIn(dir, 'init', '-q', '-b', 'main');
+  for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
+  gitIn(dir, 'add', '.');
+  gitIn(dir, '-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'files');
+  return { dir, url: `file://${dir}`, sha: gitIn(dir, 'rev-parse', 'HEAD') };
+}
+const plainRun = (command, args) => execFileSync(command, args, { stdio: 'pipe' }).toString();
+// A resolver that reads the universal concepts' address from a local repository instead of github.com.
+const localResolver = (url, repo = coreRepo) => createResolver({ root, sources: { [repo]: { git: url } }, cacheDir: join(scratch, `cache-${scratchCount++}`) });
+const permanent = /(not our ref|couldn't find remote ref)/;
 
 test('the ModelSpec JSON and the model checksums are generated from the current sources', async () => {
   assert.equal(read('model/chinook.modelspec.json'), await buildModelJson(), 'run pnpm generate');
@@ -164,9 +183,12 @@ test('the meaning check fails on a broken modelspec:// reference, an unknown con
   assert.match(schemaProblems, /schema: \/ must have required property 'format'/);
   assert.match(schemaProblems, /schema: \/concepts\/0\/kind must be equal to one of the allowed values/);
 
+  // Mixed pins are reported before anything is fetched; the odd pin is read from a local repository, not github.com.
   const pins = clone(meaning);
   pins.concepts.find((c) => c.id === 'customer').extends = coreRef('customer', 'a'.repeat(40));
-  assert.match(check(pins).join('\n'), /pinned to both/);
+  const offline = localResolver(localOrigin({ 'a.meaning.yaml': 'format: meaning/draft-1\n' }).url);
+  assert.match(checkMeaning({ local: chinook(pins), resolve: offline, schemaPath, selfRepo }).join('\n'), /pinned to both/);
+  offline.dispose();
 
   const notEntity = clone(meaning);
   notEntity.concepts.find((c) => c.id === 'track-length').of = 'music-sales';
@@ -207,10 +229,14 @@ test('every concept reference to meaninggraph/core pins one full commit, and the
 
 test('the git source fails on a ?ref= that does not exist and on a concept id that is missing at the pin', () => {
   const nowhere = '0'.repeat(40);
+  const origin = localOrigin({ 'a.meaning.yaml': 'format: meaning/draft-1\n' });
   const missingRef = clone(meaning);
   for (const concept of missingRef.concepts) if (concept.extends?.startsWith(coreUrl)) concept.extends = concept.extends.replace(corePin, nowhere);
-  const problems = check(missingRef).join('\n');
-  assert.match(problems, new RegExp(`meaning://${coreRepo}\\?ref=${nowhere} cannot be read: cannot fetch ${nowhere} from https://github.com/meaninggraph/core`));
+  const offline = localResolver(origin.url);
+  const problems = checkMeaning({ local: chinook(missingRef), resolve: offline, schemaPath, selfRepo }).join('\n');
+  offline.dispose();
+  // The message is the permanent failure of the repository, not a network error that merely looks like one.
+  assert.match(problems, new RegExp(`meaning://${coreRepo}\\?ref=${nowhere} cannot be read: cannot fetch ${nowhere} from ${origin.url}: .*(not our ref|couldn't find remote ref)`));
   assert.match(problems, /pinned to both/, 'the mixed pin is reported too');
 
   const missingId = clone(meaning);
@@ -245,9 +271,11 @@ test('checkoutGit caches an immutable commit by its id, retries a failed fetch a
     assert.equal(fetches(), 1, 'the second call reads the cache and fetches nothing');
 
     writeFileSync(join(first.dir, 'stray.txt'), 'changed');
+    writeFileSync(join(first.dir, 'a.meaning.yaml'), 'changed');
     checkoutGit(url, sha, { cacheDir, run });
-    assert.equal(fetches(), 2, 'a cached checkout with local changes is fetched again');
+    assert.equal(fetches(), 1, 'a cached checkout with local changes is made the commit again, without a fetch');
     assert.ok(!existsSync(join(first.dir, 'stray.txt')));
+    assert.equal(readFileSync(join(first.dir, 'a.meaning.yaml'), 'utf8'), 'format: meaning/draft-1\n');
 
     // A failing fetch is retried; the third attempt succeeds.
     let failures = 2;
@@ -263,7 +291,7 @@ test('checkoutGit caches an immutable commit by its id, retries a failed fetch a
     assert.deepEqual(readdirSync(tempDir), [], 'a failed checkout leaves no clone behind');
     // A ref that does not exist is not retried.
     calls.length = 0;
-    assert.throws(() => checkoutGit(url, 'f'.repeat(40), { cacheDir, run, retryDelayMs: 1 }), /cannot fetch/);
+    assert.throws(() => checkoutGit(url, 'f'.repeat(40), { cacheDir, run, retryDelayMs: 1 }), (error) => /cannot fetch/.test(error.message) && permanent.test(error.message));
     assert.equal(fetches(), 1, 'a missing ref is permanent: one attempt');
     assert.deepEqual(readdirSync(cacheDir).filter((name) => name.startsWith('.')), [], 'and leaves no temporary clone in the cache');
 
@@ -272,9 +300,132 @@ test('checkoutGit caches an immutable commit by its id, retries a failed fetch a
     const resolver = createResolver({ root, sources, cacheDir, run });
     assert.match(resolver('example.com/org/core').error, /needs a \?ref= pin/);
     assert.equal(resolver('example.com/org/core', sha).files.length, 1);
-    assert.match(resolver('example.com/org/core', 'f'.repeat(40)).error, /cannot be read: cannot fetch/);
+    assert.match(resolver('example.com/org/core', 'f'.repeat(40)).error, /cannot be read: cannot fetch .*(not our ref|couldn't find remote ref)/);
     resolver.dispose();
   } finally { rmSync(work, { recursive: true, force: true }); }
+});
+
+test('a cached checkout is made the pinned commit again before it is reused, or fetched anew', () => {
+  const a = 'format: meaning/draft-1\nid: a\n';
+  const b = 'format: meaning/draft-1\nid: b\n';
+  const { url, sha } = localOrigin({ 'a.meaning.yaml': a, 'b.meaning.yaml': b });
+  const own = (dir, ...args) => gitIn(dir, ...args);
+  const scenarios = {
+    'a modified tracked file': (k) => appendFileSync(join(k, 'a.meaning.yaml'), '# POISON\n'),
+    'a modified file hidden by skip-worktree': (k) => { own(k, 'update-index', '--skip-worktree', 'a.meaning.yaml'); appendFileSync(join(k, 'a.meaning.yaml'), '# POISON\n'); },
+    'a modified file hidden by assume-unchanged': (k) => { own(k, 'update-index', '--assume-unchanged', 'a.meaning.yaml'); appendFileSync(join(k, 'a.meaning.yaml'), '# POISON\n'); },
+    'a meaning file hidden by .git/info/exclude': (k) => { appendFileSync(join(k, '.git', 'info', 'exclude'), 'evil.meaning.yaml\n'); writeFileSync(join(k, 'evil.meaning.yaml'), 'POISON\n'); },
+    'a meaning file hidden by core.excludesFile': (k) => { writeFileSync(join(k, '.git', 'ignore-all'), '*.extra.meaning.yaml\n'); own(k, 'config', 'core.excludesFile', join(k, '.git', 'ignore-all')); writeFileSync(join(k, 'x.extra.meaning.yaml'), 'POISON\n'); },
+    'a file removed from a sparse checkout': (k) => { own(k, 'config', 'core.sparseCheckout', 'true'); mkdirSync(join(k, '.git', 'info'), { recursive: true }); writeFileSync(join(k, '.git', 'info', 'sparse-checkout'), 'b.meaning.yaml\n'); own(k, 'read-tree', '-mu', 'HEAD'); },
+    'a deleted file': (k) => rmSync(join(k, 'a.meaning.yaml')),
+    'a missing .git (a partial restore)': (k) => rmSync(join(k, '.git'), { recursive: true, force: true }),
+    'an empty directory': (k) => { rmSync(k, { recursive: true, force: true }); mkdirSync(k); },
+  };
+  for (const [name, poison] of Object.entries(scenarios)) {
+    const cacheDir = join(scratch, `cache-${scratchCount++}`);
+    const kept = checkoutGit(url, sha, { cacheDir, run: plainRun }).dir;
+    poison(kept);
+    const { dir } = checkoutGit(url, sha, { cacheDir, run: plainRun, retryDelayMs: 1 });
+    assert.equal(dir, kept, name);
+    assert.deepEqual(readdirSync(dir).filter((entry) => entry !== '.git').sort(), ['a.meaning.yaml', 'b.meaning.yaml'], `${name}: no foreign file stays`);
+    assert.equal(readFileSync(join(dir, 'a.meaning.yaml'), 'utf8'), a, `${name}: a.meaning.yaml is the commit's`);
+    assert.equal(readFileSync(join(dir, 'b.meaning.yaml'), 'utf8'), b, `${name}: b.meaning.yaml is the commit's`);
+    assert.deepEqual(own(dir, 'ls-files', '-v').split('\n'), ['H a.meaning.yaml', 'H b.meaning.yaml'], `${name}: no hidden index flag`);
+    assert.equal(own(dir, 'ls-files', '--others').trim(), '', `${name}: nothing untracked, whatever the exclude rules say`);
+    assert.deepEqual(readdirSync(cacheDir), [sha], `${name}: no temporary clone is left`);
+  }
+
+  // A cache entry that is not a repository of its own is never reset or cleaned through the repository around it.
+  const outer = join(scratch, `outer-${scratchCount++}`);
+  mkdirSync(outer);
+  gitIn(outer, 'init', '-q');
+  writeFileSync(join(outer, 'precious.txt'), 'keep');
+  const cacheDir = join(outer, '.cache');
+  mkdirSync(join(cacheDir, sha), { recursive: true });
+  writeFileSync(join(cacheDir, sha, 'junk.txt'), 'junk');
+  checkoutGit(url, sha, { cacheDir, run: plainRun });
+  assert.equal(readFileSync(join(outer, 'precious.txt'), 'utf8'), 'keep', 'the untracked file of the enclosing repository survives');
+  assert.ok(existsSync(join(cacheDir, sha, 'a.meaning.yaml')) && !existsSync(join(cacheDir, sha, 'junk.txt')));
+});
+
+test('two processes filling one cache entry both get the verified directory', () => {
+  const { url, sha } = localOrigin({ 'a.meaning.yaml': 'format: meaning/draft-1\n' });
+  const cacheDir = join(scratch, `cache-${scratchCount++}`);
+  const kept = join(cacheDir, sha);
+  // The other process finishes its checkout, and fills the entry, while this one is between checkout and rename.
+  let raced = false;
+  const run = (command, args) => {
+    const out = plainRun(command, args);
+    if (args.includes('checkout') && !raced) {
+      raced = true;
+      const work = args[1];
+      execFileSync('git', ['clone', '-q', work, kept], { stdio: 'pipe' });
+    }
+    return out;
+  };
+  const { dir } = checkoutGit(url, sha, { cacheDir, run });
+  assert.ok(raced);
+  assert.equal(dir, kept);
+  assert.equal(readFileSync(join(dir, 'a.meaning.yaml'), 'utf8'), 'format: meaning/draft-1\n');
+  assert.equal(gitIn(dir, 'rev-parse', 'HEAD'), sha);
+  assert.deepEqual(readdirSync(cacheDir), [sha], 'the loser removes its own clone');
+
+  // Were the winner's directory not the commit, the loser reports it rather than adopt it.
+  const cacheDir2 = join(scratch, `cache-${scratchCount++}`);
+  const kept2 = join(cacheDir2, sha);
+  let raced2 = false;
+  const run2 = (command, args) => {
+    const out = plainRun(command, args);
+    if (args.includes('checkout') && !raced2) { raced2 = true; mkdirSync(kept2, { recursive: true }); writeFileSync(join(kept2, 'bogus.txt'), 'x'); }
+    return out;
+  };
+  assert.throws(() => checkoutGit(url, sha, { cacheDir: cacheDir2, run: run2 }), /ENOTEMPTY|EEXIST/);
+  assert.deepEqual(readdirSync(cacheDir2).filter((name) => name.startsWith('.')), [], 'and leaves no temporary clone');
+});
+
+// A repository that writes its own concepts with its own address, the way core's FORMAT.md allows.
+const tinyRepo = 'example.com/org/tiny';
+const tinyConcept = (id, kind, rest = {}) => ({ id, kind, labels: { en: id }, description: id, ...rest });
+const tinyDoc = (selfRef) => ({
+  format: 'meaning/draft-1', id: 'tiny', name: 'Tiny', description: 'A tiny repository.', license: 'CC0-1.0',
+  concepts: [
+    tinyConcept('currency', 'entity', { values: [{ id: 'usd', labels: { en: 'US dollar' }, aliases: { en: ['USD'] } }] }),
+    tinyConcept('country', 'entity'),
+    tinyConcept('money-amount', 'attribute', { 'units-of': 'currency' }),
+    tinyConcept('price', 'attribute', { extends: selfRef('money-amount') }),
+    tinyConcept('headcount', 'measure', { measure: { formula: 'count', aggregation: 'sum' } }),
+    tinyConcept('per-capita', 'measure', { measure: { formula: 'x / y', inputs: ['headcount'] } }),
+    tinyConcept('per-capita-two', 'measure', { extends: selfRef('per-capita'), measure: { formula: 'x' } }),
+    tinyConcept('loop-a', 'attribute', { extends: selfRef('loop-b') }),
+    tinyConcept('loop-b', 'attribute', { extends: selfRef('loop-a') }),
+  ],
+});
+
+test('a repository\'s own address inside it is the same as a bare id: inheritance follows it', () => {
+  const consumerChecks = (selfRef) => {
+    const origin = localOrigin({ 'tiny.meaning.yaml': stringifyYaml(tinyDoc(selfRef)) });
+    const resolver = localResolver(origin.url, tinyRepo);
+    const r = (id) => `meaning://${tinyRepo}/${id}?ref=${origin.sha}`;
+    const consumer = (concepts) => ({ format: 'meaning/draft-1', id: 'consumer', name: 'Consumer', description: 'c', license: 'CC0-1.0', concepts: concepts.map((c) => tinyConcept(c.id, c.kind, c.rest)) });
+    const problemsOf = (...concepts) => checkMeaning({ local: indexConcepts([{ path: 'consumer.meaning.yaml', doc: consumer(concepts) }]), resolve: resolver, schemaPath, selfRepo: 'example.com/me/consumer' }).map((p) => p.replace(/^.*?: concept/, 'concept').replaceAll(origin.sha, '<pin>'));
+    try {
+      return {
+        good: problemsOf({ id: 'list-price', kind: 'attribute', rest: { extends: r('price'), unit: 'USD' } }),
+        summed: problemsOf({ id: 'summed-ratio', kind: 'measure', rest: { extends: r('per-capita-two'), measure: { formula: 'x', aggregation: 'sum' } } }),
+        wrongUnits: problemsOf({ id: 'wrong-units', kind: 'attribute', rest: { extends: r('price'), 'units-of': r('country') } }),
+        badUnit: problemsOf({ id: 'bad-unit', kind: 'attribute', rest: { extends: r('price'), unit: 'ZZZ' } }),
+        cycle: problemsOf({ id: 'looping', kind: 'attribute', rest: { extends: r('loop-a') } }),
+      };
+    } finally { resolver.dispose(); }
+  };
+  const bare = consumerChecks((id) => id);
+  const viaAddress = consumerChecks((id) => `meaning://${tinyRepo}/${id}`);
+  assert.deepEqual(bare.good, []);
+  assert.deepEqual(viaAddress, bare, 'every check gives the same answer whether the repository writes bare ids or its own address');
+  assert.match(viaAddress.summed.join('\n'), /concept summed-ratio: aggregation sum on a ratio \(it is computed from the measure headcount\)/);
+  assert.match(viaAddress.wrongUnits.join('\n'), /concept wrong-units: units-of .*country.* is neither currency nor a kind of it/);
+  assert.match(viaAddress.badUnit.join('\n'), /concept bad-unit: unit "ZZZ" must name exactly one value of currency \(units-of\), but names none/);
+  assert.match(viaAddress.cycle.join('\n'), /concept looping: extends forms a cycle \(looping -> loop-a -> loop-b -> loop-a\)/);
 });
 
 test('the facts the meaning file states hold in the data', () => {
@@ -342,6 +493,24 @@ test('measures are computed from attributes and measures, grouped by dimensions 
   // A kind of a ratio is a ratio even without measure inputs of its own.
   assert.match(mutate('music-sales-per-capita', (c) => { c.measure.aggregation = 'average'; c.measure.inputs = []; }), /aggregation average on a ratio \(it is computed from the measure population\)/);
   assert.equal(mutate('music-sales-per-capita', (c) => { c.measure.aggregation = 'max'; }), '', 'the largest ratio is a fair question');
+  // aggregation is inherited through extends like unit: a ratio that extends a measure which sums sums, unless it says none.
+  const derived = (aggregation) => mutate('music-sales', (c, doc) => {
+    doc.concepts.push({ id: 'summing-measure', kind: 'measure', labels: { en: 'Summing measure' }, description: 'A measure that adds up.', measure: { formula: 'x', aggregation: 'sum' } });
+    doc.concepts.push({ id: 'derived-ratio', kind: 'measure', extends: 'summing-measure', labels: { en: 'Derived ratio' }, description: 'A ratio of a kind of the summing measure.', measure: { formula: 'x / y', inputs: ['music-sales'], ...(aggregation && { aggregation }) } });
+    doc.concepts.push({ id: 'derived-total', kind: 'measure', extends: 'summing-measure', labels: { en: 'Derived total' }, description: 'A kind of the summing measure, no ratio.', measure: { formula: 'x + y' } });
+  });
+  assert.equal(derived(undefined), 'concept derived-ratio: aggregation sum on a ratio (it is computed from the measure music-sales); a ratio is recomputed per group from its inputs, so its aggregation is none; sum is inherited from summing-measure, state aggregation: none');
+  assert.equal(derived('none'), '', 'saying none overrides the inherited sum, and a kind of a summing measure that is no ratio may sum');
+});
+
+test('a word names one value of a concept whatever the language', () => {
+  const values = (...list) => ({ format: 'meaning/draft-1', id: 'v', concepts: [{ id: 'colour', kind: 'entity', labels: { en: 'Colour' }, description: 'd', values: list }] });
+  const problemsOf = (doc) => checkMeaning({ local: indexConcepts([{ path: 'v.meaning.yaml', doc }]), resolve, models: {}, selfRepo }).map((p) => p.replace(/^.*?: concept/, 'concept'));
+  const red = { id: 'red', labels: { en: 'Red', ru: 'Красный' } };
+  assert.deepEqual(problemsOf(values(red, { id: 'rose', labels: { en: 'Rose' }, aliases: { en: ['Pink'] } })), []);
+  assert.deepEqual(problemsOf(values(red, { id: 'rouge', labels: { fr: 'Rouge' }, aliases: { ru: ['красный'] } })), ['concept colour: "красный" names both red and rouge'], 'the same word in another language, ignoring case');
+  assert.deepEqual(problemsOf(values(red, { id: 'rouge', labels: { fr: 'Rouge' }, aliases: { fr: ['RED'] } })), ['concept colour: "RED" names both red and rouge']);
+  assert.deepEqual(problemsOf(values({ id: 'red', labels: { en: 'Red', ru: 'Red' }, aliases: { en: ['red'] } })), [], 'one value may repeat its own word');
 });
 
 test('bindings carry a role, and the role must fit the model', () => {
