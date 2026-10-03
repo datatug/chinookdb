@@ -1,0 +1,52 @@
+# OpenVaultDB publisher manifest for the Chinook sample database.
+# Format: draft. Every path below is relative to this file and must exist.
+format: ovdb-manifest/draft-1
+id: chinook
+title: Chinook music store
+description: >-
+  The Chinook sample database: a digital music store with artists, albums,
+  tracks, playlists, customers, employees and invoices. Read-only, served from
+  a pinned copy of the upstream SQLite fixture.
+
+# The canonical identity of the database. It stays the same if the deployment moves.
+url: https://chinookdb.com/ovdb/dbs/chinook
+
+deployment:
+  url: https://cloud.openvaultdb.com/ovdb/dbs/chinook
+  engine: sqlite
+  discovery: https://cloud.openvaultdb.com/.well-known/openvaultdb
+
+model:
+  modelspec: model/chinook.modelspec.json
+  hcl: model/chinook.modelspec.hcl
+
+meaning:
+  file: model/chinook.meaning.yaml
+  # Registered as `chinook` in github.com/meaninggraph/registry.
+  graph:
+    id: chinook
+    address: meaning://github.com/datatug/chinookdb
+
+publisher:
+  name: DataTug
+  url: https://github.com/datatug
+  repository: https://github.com/datatug/chinookdb
+
+licences:
+  model: MIT
+  meaning: CC0-1.0
+
+# Recordset names are the ModelSpec entity names, which are also the collection
+# names the deployment serves.
+recordsets:
+  - Album
+  - Artist
+  - Customer
+  - Employee
+  - Genre
+  - Invoice
+  - InvoiceLine
+  - MediaType
+  - Playlist
+  - PlaylistTrack
+  - Track

@@ -177,6 +177,29 @@ clients that saved the old connection URL. Legacy `/ovdb/v1/` paths redirect to
 cloud `/v1/` paths, except the former static-JSON `GET /query?q=...` shape,
 which returns 410 because its query syntax is different.
 
+## OVDB manifest
+
+This repository is a publisher for the OpenVaultDB Directory. The root
+[`OVDB.md`](OVDB.md) opts the repository in and lists, by explicit path, the
+manifest files the Directory may read (no globs). [`ovdb.yaml`](ovdb.yaml) is
+the one manifest it lists. It states, in a draft format
+(`ovdb-manifest/draft-1`):
+
+- the canonical identity, `https://chinookdb.com/ovdb/dbs/chinook`, which stays
+  the same if the database moves, and the live deployment at
+  `cloud.openvaultdb.com` with its engine (`sqlite`) and discovery document;
+- the ModelSpec files and the meaning file, and the MeaningGraph address
+  `meaning://github.com/datatug/chinookdb`;
+- the publisher (DataTug) and the licences: MIT for the model, CC0-1.0 for the
+  meaning file;
+- the recordsets, which are the ModelSpec entity names and the collection names
+  the deployment serves.
+
+The manifest holds no secrets and claims no capabilities; what the server can
+do comes from its own discovery document. `pnpm test:model` fails when
+`OVDB.md` does not parse, when a file either manifest names is missing, or when
+the recordsets are not exactly the ModelSpec entities.
+
 ## DataTug Embed and DTQL
 
 Every `/tables/<Table>/` page loads the framework-neutral DataTug Embed bundle

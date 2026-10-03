@@ -9,6 +9,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { listDataFiles, listTrackedFiles, verifyChecksums } from './lib/checksums.mjs';
 import { checkMeaning, checkoutGit, coreRepo, createResolver, effectiveValues, indexConcepts, loadMeaningDir, matchValues, parseConceptRef, parseModelRef, pinsOf, valueCoverageProblems } from './lib/meaning.mjs';
 import { compareModelWithData, parseHcl, toModelspecJson, validateModel } from './lib/modelspec.mjs';
+import { checkOvdbManifest, parseFrontmatter } from './lib/ovdb-manifest.mjs';
 import { buildModelJson, chinookModule, listModelFiles, modelChecksumsPath, modelDir } from './generate-model.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -598,4 +599,48 @@ test('a binding can match stored values by a code instead of by name', () => {
   const alpha2 = new Map(data.Invoice.map((row) => [row.BillingCountry, matchValues(countries, row.BillingCountry)[0].codes.alpha2]));
   const coded = { ...data, Invoice: data.Invoice.map((row) => ({ ...row, BillingCountry: alpha2.get(row.BillingCountry) })) };
   assert.deepEqual(valueCoverageProblems({ local, resolve, data: coded }), []);
+});
+
+// The OpenVaultDB publisher manifest: OVDB.md opts the repository in, ovdb.yaml describes the database.
+const repoFiles = (changes = {}) => ({
+  read: (path) => (path in changes ? changes[path] : read(path)),
+  exists: (path) => (path in changes ? changes[path] !== null : existsSync(join(root, path))),
+});
+const entityNames = Object.keys(model.entities);
+const manifestProblems = (changes) => checkOvdbManifest(repoFiles(changes), { entityNames, meaningLicence: meaning.license }).join('\n');
+const manifestDoc = () => parseYaml(read('ovdb.yaml'));
+const withManifest = (change) => {
+  const doc = manifestDoc();
+  change(doc);
+  return manifestProblems({ 'ovdb.yaml': stringifyYaml(doc) });
+};
+
+test('OVDB.md and ovdb.yaml are a valid publisher manifest: files exist and recordsets equal the ModelSpec entities', () => {
+  assert.equal(manifestProblems({}), '');
+  const { data } = parseFrontmatter(read('OVDB.md'));
+  assert.deepEqual(data, { ovdb: 1, publish: ['./ovdb.yaml'] });
+  const doc = manifestDoc();
+  assert.equal(doc.url, 'https://chinookdb.com/ovdb/dbs/chinook');
+  assert.deepEqual([...doc.recordsets].sort(), [...entityNames].sort());
+  assert.equal(doc.licences.model, 'MIT');
+  assert.equal(doc.licences.meaning, meaning.license);
+});
+
+test('a broken OVDB.md or ovdb.yaml fails the manifest check', () => {
+  assert.match(manifestProblems({ 'OVDB.md': null }), /OVDB.md is missing/);
+  assert.match(manifestProblems({ 'OVDB.md': '# no frontmatter\n' }), /OVDB.md has no YAML frontmatter/);
+  assert.match(manifestProblems({ 'OVDB.md': '---\novdb: 2\npublish: [./ovdb.yaml]\n---\n' }), /ovdb must be 1/);
+  assert.match(manifestProblems({ 'OVDB.md': '---\novdb: 1\npublish: [./nope.yaml]\n---\n' }), /publish entry .\/nope.yaml does not exist/);
+  assert.match(manifestProblems({ 'OVDB.md': '---\novdb: 1\npublish: ["./*.yaml"]\n---\n' }), /no glob/);
+  assert.match(manifestProblems({ 'OVDB.md': '---\novdb: 1\npublish: []\n---\n' }), /publish must list at least one/);
+  assert.match(withManifest((m) => { delete m.url; }), /url is required/);
+  assert.match(withManifest((m) => { m.format = 'ovdb-manifest/v9'; }), /format must be ovdb-manifest\/draft-1/);
+  assert.match(withManifest((m) => { delete m.deployment.engine; }), /deployment.engine is required/);
+  assert.match(withManifest((m) => { m.meaning.file = 'model/missing.meaning.yaml'; }), /meaning.file names model\/missing.meaning.yaml, which does not exist/);
+  assert.match(withManifest((m) => { m.model.modelspec = '../outside.json'; }), /must be a path inside the repository/);
+  assert.match(withManifest((m) => { m.licences.meaning = 'MIT'; }), /licences.meaning is MIT but the meaning file says CC0-1.0/);
+  assert.match(withManifest((m) => { m.recordsets.pop(); }), /recordsets lacks ModelSpec entities: Track/);
+  assert.match(withManifest((m) => { m.recordsets.push('Podcast'); }), /not ModelSpec entities: Podcast/);
+  assert.match(withManifest((m) => { m.recordsets.push('Album'); }), /recordsets lists a name twice/);
+  assert.match(manifestProblems({ 'ovdb.yaml': 'format: [unterminated' }), /ovdb.yaml: is not valid YAML/);
 });
