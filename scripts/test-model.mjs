@@ -1,29 +1,38 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import { parse as parseYaml } from 'yaml';
 import { listDataFiles, listTrackedFiles, verifyChecksums } from './lib/checksums.mjs';
-import { checkMeaning, createResolver, effectiveValues, indexConcepts, loadMeaningDir, matchValues, parseConceptRef, parseModelRef, valueCoverageProblems } from './lib/meaning.mjs';
+import { checkMeaning, checkoutGit, coreRepo, createResolver, effectiveValues, indexConcepts, loadMeaningDir, matchValues, parseConceptRef, parseModelRef, pinsOf, valueCoverageProblems } from './lib/meaning.mjs';
 import { compareModelWithData, parseHcl, toModelspecJson, validateModel } from './lib/modelspec.mjs';
 import { buildModelJson, chinookModule, listModelFiles, modelChecksumsPath, modelDir } from './generate-model.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const read = (path) => readFileSync(join(root, path), 'utf8');
-const schemaPath = join(root, 'model', 'vendor', 'meaninggraph-core', 'meaning.schema.json');
 const hcl = read('model/chinook.modelspec.hcl');
 const model = toModelspecJson(parseHcl(hcl), chinookModule);
 const schema = JSON.parse(read('src/data/schema.json'));
 const data = JSON.parse(read('public/data/chinook.json'));
 const meaningPath = 'model/chinook.meaning.yaml';
 const meaning = parseYaml(read(meaningPath));
+const selfRepo = 'github.com/datatug/chinookdb';
+// The universal concepts and the schema come from one checkout of meaninggraph/core at the
+// commit that the meaning file's references pin; the resolver returns its directory.
 const resolve = createResolver({ root });
+after(() => resolve.dispose());
+const [corePin] = pinsOf(meaning, coreRepo);
+const coreIndex = resolve(coreRepo, corePin);
+if (coreIndex.error) throw new Error(coreIndex.error);
+const schemaPath = join(coreIndex.dir, 'meaning.schema.json');
 const chinook = (doc = meaning) => indexConcepts([{ path: join(root, meaningPath), doc }]);
 const clone = (value) => structuredClone(value);
-const check = (doc) => checkMeaning({ local: chinook(doc), resolve, schemaPath });
+const check = (doc) => checkMeaning({ local: chinook(doc), resolve, schemaPath, selfRepo });
+const coreUrl = `meaning://${coreRepo}`;
+const coreRef = (id, pin = corePin) => `${coreUrl}/${id}?ref=${pin}`;
 
 test('the ModelSpec JSON and the model checksums are generated from the current sources', async () => {
   assert.equal(read('model/chinook.modelspec.json'), await buildModelJson(), 'run pnpm generate');
@@ -118,7 +127,7 @@ test('the HCL parser rejects syntax outside ModelSpec v0 instead of guessing', (
 
 test('the meaning file and the universal concepts validate against the schema and every reference resolves', () => {
   assert.deepEqual(check(meaning), []);
-  assert.deepEqual(checkMeaning({ local: loadMeaningDir(join(root, 'model/vendor/meaninggraph-core')), resolve, schemaPath }), []);
+  assert.deepEqual(checkMeaning({ local: coreIndex, resolve, schemaPath, selfRepo: coreRepo }), [], 'the universal concepts at the pinned commit pass the same checks');
   for (const concept of meaning.concepts) assert.ok(concept.bindings || concept.source || concept.measure?.inputs, `${concept.id} links to the model, names its external source, or is derived from concepts that do`);
 });
 
@@ -141,7 +150,7 @@ test('the meaning check fails on a broken modelspec:// reference, an unknown con
   assert.match(check(module).join('\n'), /module music is not listed in models/);
 
   const unknown = clone(meaning);
-  unknown.concepts.find((c) => c.id === 'customer').extends = 'meaning://github.com/meaninggraph/core/client';
+  unknown.concepts.find((c) => c.id === 'customer').extends = coreRef('client');
   assert.match(check(unknown).join('\n'), /concept client does not exist in meaning:\/\/github.com\/meaninggraph\/core/);
 
   const local = clone(meaning);
@@ -156,7 +165,7 @@ test('the meaning check fails on a broken modelspec:// reference, an unknown con
   assert.match(schemaProblems, /schema: \/concepts\/0\/kind must be equal to one of the allowed values/);
 
   const pins = clone(meaning);
-  pins.concepts.find((c) => c.id === 'customer').extends = 'meaning://github.com/meaninggraph/core/customer?ref=v1';
+  pins.concepts.find((c) => c.id === 'customer').extends = coreRef('customer', 'a'.repeat(40));
   assert.match(check(pins).join('\n'), /pinned to both/);
 
   const notEntity = clone(meaning);
@@ -183,21 +192,88 @@ test('the reference grammar: bare ids are local, meaning:// names another reposi
   assert.equal(parseModelRef('modelspec://chinook.Invoice'), null, 'legacy form without the third slash');
 });
 
-test('switching meaning://github.com/meaninggraph/core from the vendored copy to a git repository is one source entry', () => {
-  const work = mkdtempSync(join(tmpdir(), 'meaning-core-'));
+test('every concept reference to meaninggraph/core pins one full commit, and the schema comes from that checkout', () => {
+  const pins = pinsOf(meaning, coreRepo);
+  assert.equal(pins.length, 1, `one pin for the repository, got ${JSON.stringify(pins)}`);
+  assert.match(pins[0], /^[0-9a-f]{40}$/, 'a pin is a full commit id, never a branch or tag');
+  assert.equal(corePin, pins[0]);
+  assert.equal(schemaPath, join(coreIndex.dir, 'meaning.schema.json'));
+  assert.ok(existsSync(schemaPath), 'the resolver returns the directory of the pinned checkout');
+  assert.ok(coreIndex.concepts.has('country') && coreIndex.concepts.has('currency'));
+  const unpinned = JSON.parse(JSON.stringify(meaning).replaceAll(`?ref=${corePin}`, ''));
+  assert.match(check(unpinned).join('\n'), /read from git and needs a \?ref= pin/);
+  assert.ok(!existsSync(join(root, 'model', 'vendor')), 'no vendored copy of the universal concepts');
+});
+
+test('the git source fails on a ?ref= that does not exist and on a concept id that is missing at the pin', () => {
+  const nowhere = '0'.repeat(40);
+  const missingRef = clone(meaning);
+  for (const concept of missingRef.concepts) if (concept.extends?.startsWith(coreUrl)) concept.extends = concept.extends.replace(corePin, nowhere);
+  const problems = check(missingRef).join('\n');
+  assert.match(problems, new RegExp(`meaning://${coreRepo}\\?ref=${nowhere} cannot be read: cannot fetch ${nowhere} from https://github.com/meaninggraph/core`));
+  assert.match(problems, /pinned to both/, 'the mixed pin is reported too');
+
+  const missingId = clone(meaning);
+  missingId.concepts.find((c) => c.id === 'customer').extends = coreRef('no-such-concept');
+  assert.match(check(missingId).join('\n'), /concept customer extends: concept no-such-concept does not exist in meaning:\/\/github.com\/meaninggraph\/core/);
+});
+
+test('checkoutGit caches an immutable commit by its id, retries a failed fetch and never leaves a clone behind', () => {
+  const work = mkdtempSync(join(tmpdir(), 'meaning-git-'));
   try {
-    const git = (...args) => execFileSync('git', ['-C', work, ...args], { stdio: 'pipe' });
+    const origin = join(work, 'origin');
+    const git = (...args) => execFileSync('git', ['-C', origin, ...args], { stdio: 'pipe' }).toString().trim();
+    mkdirSync(origin);
     git('init', '-q', '-b', 'main');
-    for (const name of readdirSync(join(root, 'model/vendor/meaninggraph-core'))) writeFileSync(join(work, name), read(`model/vendor/meaninggraph-core/${name}`));
+    writeFileSync(join(origin, 'a.meaning.yaml'), 'format: meaning/draft-1\n');
     git('add', '.');
-    git('-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'core');
-    git('tag', 'v0');
-    const sources = { 'github.com/meaninggraph/core': { git: `file://${work}` } };
-    const pinned = JSON.parse(JSON.stringify(meaning).replaceAll('meaning://github.com/meaninggraph/core/population', 'meaning://github.com/meaninggraph/core/population?ref=v0'));
-    assert.match(checkMeaning({ local: chinook(pinned), resolve: createResolver({ root, sources }), schemaPath }).join('\n'), /pinned to both/, 'every reference to one repository carries the same pin');
-    const allPinned = JSON.parse(JSON.stringify(meaning).replace(/(meaning:\/\/github\.com\/meaninggraph\/core\/[a-z-]+)/g, '$1?ref=v0'));
-    assert.deepEqual(checkMeaning({ local: chinook(allPinned), resolve: createResolver({ root, sources }), schemaPath }), []);
-    assert.match(checkMeaning({ local: chinook(), resolve: createResolver({ root, sources }), schemaPath }).join('\n'), /needs a \?ref= pin/);
+    git('-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'a');
+    const sha = git('rev-parse', 'HEAD');
+    const url = `file://${origin}`;
+    const calls = [];
+    const cacheDir = join(work, 'cache');
+    const tempDir = join(work, 'tmp');
+    mkdirSync(tempDir);
+    const run = (command, args) => { calls.push(args.join(' ')); return execFileSync(command, args, { stdio: 'pipe' }).toString(); };
+    const fetches = () => calls.filter((call) => / fetch /.test(call)).length;
+
+    const first = checkoutGit(url, sha, { cacheDir, run });
+    assert.equal(first.dir, join(cacheDir, sha), 'cached under the commit id');
+    assert.deepEqual(readdirSync(cacheDir), [sha], 'no temporary clone is left in the cache');
+    assert.equal(fetches(), 1);
+    assert.equal(checkoutGit(url, sha, { cacheDir, run }).dir, first.dir);
+    assert.equal(fetches(), 1, 'the second call reads the cache and fetches nothing');
+
+    writeFileSync(join(first.dir, 'stray.txt'), 'changed');
+    checkoutGit(url, sha, { cacheDir, run });
+    assert.equal(fetches(), 2, 'a cached checkout with local changes is fetched again');
+    assert.ok(!existsSync(join(first.dir, 'stray.txt')));
+
+    // A failing fetch is retried; the third attempt succeeds.
+    let failures = 2;
+    const flaky = (command, args) => { if (args.includes('fetch') && failures-- > 0) throw Object.assign(new Error('network'), { stderr: Buffer.from('fatal: unable to access: Connection reset') }); return run(command, args); };
+    const retried = checkoutGit(url, 'main', { tempDir, run: flaky, retryDelayMs: 1 });
+    assert.ok(existsSync(join(retried.dir, 'a.meaning.yaml')));
+    retried.release();
+    assert.ok(!existsSync(retried.dir), 'a temporary clone is removed on release');
+
+    // It stops after `retries` attempts and removes the clone it started.
+    const always = (command, args) => { if (args.includes('fetch')) throw Object.assign(new Error('network'), { stderr: Buffer.from('fatal: unable to access: Connection reset') }); return run(command, args); };
+    assert.throws(() => checkoutGit(url, 'main', { tempDir, run: always, retries: 2, retryDelayMs: 1 }), /cannot fetch main from .*Connection reset/);
+    assert.deepEqual(readdirSync(tempDir), [], 'a failed checkout leaves no clone behind');
+    // A ref that does not exist is not retried.
+    calls.length = 0;
+    assert.throws(() => checkoutGit(url, 'f'.repeat(40), { cacheDir, run, retryDelayMs: 1 }), /cannot fetch/);
+    assert.equal(fetches(), 1, 'a missing ref is permanent: one attempt');
+    assert.deepEqual(readdirSync(cacheDir).filter((name) => name.startsWith('.')), [], 'and leaves no temporary clone in the cache');
+
+    // A git source resolves like the real one: a pin is required and the concepts load.
+    const sources = { 'example.com/org/core': { git: url } };
+    const resolver = createResolver({ root, sources, cacheDir, run });
+    assert.match(resolver('example.com/org/core').error, /needs a \?ref= pin/);
+    assert.equal(resolver('example.com/org/core', sha).files.length, 1);
+    assert.match(resolver('example.com/org/core', 'f'.repeat(40)).error, /cannot be read: cannot fetch/);
+    resolver.dispose();
   } finally { rmSync(work, { recursive: true, force: true }); }
 });
 
@@ -218,13 +294,12 @@ test('the facts the meaning file states hold in the data', () => {
 });
 
 test('the concepts of the hero question have Russian labels, own or inherited', () => {
-  const core = loadMeaningDir(join(root, 'model/vendor/meaninggraph-core'));
   const local = chinook();
   for (const id of ['music-sales', 'billing-country', 'population', 'music-sales-per-capita']) {
     const concept = local.concepts.get(id).concept;
     assert.ok(concept.labels.ru, `${id} has a Russian label`);
     const reused = concept.extends ?? concept['values-of'];
-    const parent = core.concepts.get(parseConceptRef(reused).id).concept;
+    const parent = coreIndex.concepts.get(parseConceptRef(reused).id).concept;
     assert.ok(parent.labels.ru, `${reused} has a Russian label`);
   }
   const perCapita = local.concepts.get('music-sales-per-capita').concept;
@@ -233,7 +308,6 @@ test('the concepts of the hero question have Russian labels, own or inherited', 
   assert.deepEqual(perCapita.measure.dimensions, ['billing-country']);
 });
 
-const core = 'meaning://github.com/meaninggraph/core';
 const mutate = (id, change) => {
   const doc = clone(meaning);
   change(doc.concepts.find((c) => c.id === id), doc);
@@ -241,10 +315,10 @@ const mutate = (id, change) => {
 };
 
 test('extends means "is a kind of" and joins compatible kinds only', () => {
-  assert.match(mutate('customer', (c) => { c.extends = `${core}/revenue`; }), /concept customer: an entity cannot extend meaning:\/\/github.com\/meaninggraph\/core\/revenue, which is a measure; extends means "is a kind of", and an entity may extend only entity/);
-  assert.match(mutate('music-sales', (c) => { c.extends = `${core}/invoice-total`; }), /a measure cannot extend .*invoice-total, which is an attribute/);
+  assert.match(mutate('customer', (c) => { c.extends = coreRef('revenue'); }), /concept customer: an entity cannot extend meaning:\/\/github.com\/meaninggraph\/core\/revenue\?ref=[0-9a-f]{40}, which is a measure; extends means "is a kind of", and an entity may extend only entity/);
+  assert.match(mutate('music-sales', (c) => { c.extends = coreRef('invoice-total'); }), /a measure cannot extend .*invoice-total.*, which is an attribute/);
   // The draft's old double use: a dimension "extending" the entity whose instances it holds.
-  assert.match(mutate('billing-country', (c) => { delete c['values-of']; c.extends = `${core}/country`; }), /a dimension cannot extend .*country, which is an entity; .* may extend only dimension or attribute/);
+  assert.match(mutate('billing-country', (c) => { delete c['values-of']; c.extends = coreRef('country'); }), /a dimension cannot extend .*country.*, which is an entity; .* may extend only dimension or attribute/);
   assert.equal(mutate('invoice-date', (c) => { c.kind = 'attribute'; }), '', 'an attribute may extend an attribute');
 });
 
@@ -253,9 +327,9 @@ test('values come from values-of only, and values-of and units-of name entities'
   const billing = local.concepts.get('billing-country').concept;
   assert.equal(effectiveValues(billing, local, resolve).length, 24, 'billing-country holds the universal countries');
   const { 'values-of': _, ...withoutValuesOf } = billing;
-  assert.deepEqual(effectiveValues({ ...withoutValuesOf, extends: `${core}/date` }, local, resolve), [], 'extends passes no values');
+  assert.deepEqual(effectiveValues({ ...withoutValuesOf, extends: coreRef('date') }, local, resolve), [], 'extends passes no values');
   assert.match(mutate('billing-country', (c) => { c['values-of'] = 'music-sales'; }), /values-of names music-sales, which is a measure, not an entity/);
-  assert.match(mutate('manager', (c) => { c['values-of'] = 'customer'; }), /concept manager: values-of customer is neither employee nor a kind of it, which .*\/manager requires/);
+  assert.match(mutate('manager', (c) => { c['values-of'] = 'customer'; }), /concept manager: values-of customer is neither employee nor a kind of it, which .*\/manager.* requires/);
   assert.match(mutate('invoice-total', (c) => { c.unit = 'USDD'; }), /concept invoice-total: unit "USDD" must name exactly one value of currency \(units-of\), but names none/);
   assert.match(mutate('music-sales', (c) => { c.unit = 'dollars per track'; }), /unit "dollars per track" must name exactly one value of currency/, 'units-of is inherited through extends (revenue)');
   assert.equal(mutate('list-price', (c) => { c.unit = 'US dollar'; }), '', 'a label names the currency too');
@@ -278,6 +352,60 @@ test('bindings carry a role, and the role must fit the model', () => {
   assert.match(mutate('support-rep', (c) => { c['values-of'] = 'customer'; }), /concept support-rep: Customer.SupportRepId references Employee, but the instances of customer are Customer rows/);
   assert.match(mutate('support-rep', (c) => { delete c['values-of']; }), /Customer.SupportRepId has role foreign-key, so support-rep needs values-of/);
   assert.match(mutate('track-length', (c) => { c.bindings[0].role = 'foreign-key'; }), /Track.Milliseconds has role foreign-key but is not a reference \(it is an int\)/);
+});
+
+test('identifier and display-name sit on the concept\'s own entity, a concept binds one entity, and a foreign key needs its target\'s entity binding', () => {
+  const albumBinding = (role, property) => ({ model: 'modelspec:///chinook.Album', property, role });
+  assert.match(mutate('artist', (c) => { c.bindings[1] = albumBinding('identifier', 'AlbumId'); }), /concept artist: Album.AlbumId has role identifier, but artist is bound to the entity Artist; the property must be on that entity/);
+  assert.match(mutate('artist', (c) => { c.bindings[2] = albumBinding('display-name', 'Title'); }), /concept artist: Album.Title has role display-name, but artist is bound to the entity Artist; the property must be on that entity/);
+  assert.match(mutate('artist', (c) => { c.bindings.push({ model: 'modelspec:///chinook.Album', role: 'entity' }); }), /concept artist: has 2 entity bindings \(chinook.Artist, chinook.Album\); a concept binds one entity/);
+  const noEntity = mutate('artist', (c) => { c.bindings.splice(0, 1); });
+  assert.match(noEntity, /Artist.ArtistId has role identifier, but artist has no entity binding, so it cannot be checked which entity the property must sit on/);
+  assert.match(noEntity, /Artist.Name has role display-name, but artist has no entity binding/);
+  assert.match(noEntity, /Album.ArtistId has role foreign-key, but artist has no entity binding in this repository, so it cannot be checked that Artist holds its instances/);
+  const noTarget = mutate('employee', (c) => { delete c.bindings; });
+  assert.match(noTarget, /concept manager: Employee.ReportsTo has role foreign-key, but employee has no entity binding in this repository, so it cannot be checked that Employee holds its instances/);
+  assert.match(noTarget, /concept support-rep: Customer.SupportRepId has role foreign-key, but employee has no entity binding/);
+  assert.equal(mutate('artist', () => {}), '', 'the unchanged concept passes');
+});
+
+test('music-sales binds only the measure\'s own column; the price and quantity it is computed from are inputs', () => {
+  const sales = meaning.concepts.find((c) => c.id === 'music-sales');
+  assert.deepEqual(sales.bindings.map((b) => `${parseModelRef(b.model).name}.${b.property} ${b.role}`), ['Invoice.Total value']);
+  assert.deepEqual(sales.measure.inputs, ['invoice-total', 'unit-price', 'quantity']);
+});
+
+test('an extends cycle is reported through a meaning:// reference to the repository itself, and a self-reference cannot be pinned', () => {
+  const self = (id) => `meaning://${selfRepo}/${id}`;
+  const direct = mutate('invoice', (c) => { c.extends = self('invoice'); });
+  assert.match(direct, /concept invoice: extends forms a cycle \(invoice -> invoice\)/);
+  const cycle = clone(meaning);
+  cycle.concepts.find((c) => c.id === 'invoice').extends = self('invoice-line');
+  cycle.concepts.find((c) => c.id === 'invoice-line').extends = self('invoice');
+  const problems = check(cycle).join('\n');
+  assert.match(problems, /concept invoice: extends forms a cycle \(invoice -> invoice-line -> invoice\)/);
+  assert.match(problems, /concept invoice-line: extends forms a cycle \(invoice-line -> invoice -> invoice-line\)/);
+  assert.match(mutate('invoice', (c) => { c.extends = `${self('invoice')}?ref=${corePin}`; }), /cannot carry \?ref=/);
+  // A self-reference to an existing concept of another kind is checked like a bare id.
+  assert.match(mutate('customer', (c) => { c.extends = self('music-sales'); }), /an entity cannot extend .*music-sales, which is a measure/);
+  assert.equal(mutate('manager', (c) => { c['values-of'] = self('employee'); }), '', 'a self-reference resolves to the concept of this repository');
+});
+
+test('a child\'s units-of may narrow its parent\'s, never change it', () => {
+  assert.match(mutate('invoice-total', (c) => { c['units-of'] = coreRef('country'); }), /concept invoice-total: units-of .*country.* is neither currency nor a kind of it, which .*invoice-total.* requires/);
+  assert.equal(mutate('invoice-total', (c) => { c['units-of'] = coreRef('currency'); }), '', 'the same entity is fine');
+  assert.equal(mutate('invoice-total', (c) => { delete c['units-of']; }), '', 'inheriting it is fine');
+});
+
+test('licences are stated where files are published: the HCL, the meaning file, /about/ and the README', () => {
+  assert.match(hcl, /^# Licence: MIT \(https:\/\/github.com\/datatug\/chinookdb\/blob\/main\/LICENSE\)\./);
+  assert.match(hcl.split('\n').slice(0, 4).join('\n'), /Luis Rocha.*MIT/s, 'the upstream notice sits at the top of the HCL too');
+  assert.equal(meaning.license, 'CC0-1.0');
+  const about = read('src/pages/about/index.astro');
+  for (const text of ['MIT', 'CC0-1.0', 'meaning file', 'model/chinook.modelspec.hcl']) assert.ok(about.includes(text), `/about/ mentions ${text}`);
+  const readme = read('README.md');
+  for (const text of ['`docs/`', '`model/checksums.json`', '`public/data/metadata/checksums.json`']) assert.ok(readme.includes(text), `the README licence split names ${text}`);
+  assert.equal(JSON.parse(read('model/chinook.modelspec.json')).license, undefined, 'the ModelSpec JSON AST has no licence field to carry one');
 });
 
 test('the schema rejects the draft forms that the split replaced', () => {

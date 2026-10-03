@@ -1,13 +1,16 @@
-// Checks for meaning files (format meaning/draft-1, schema in
-// model/vendor/meaninggraph-core/meaning.schema.json): JSON Schema validation,
-// then the rules a schema cannot express. Every concept reference must
-// resolve; extends joins compatible kinds only; values-of and units-of name
-// entities; measures are computed from attributes and measures and grouped by
-// dimensions and attributes; a ratio is never summed; every modelspec://
-// binding must name an existing entity and property that fits its role; and
-// values must cover the data they describe.
+// Checks for meaning files (format meaning/draft-1, schema meaning.schema.json
+// from the pinned meaninggraph/core checkout): JSON Schema validation, then
+// the rules a schema cannot express. Every concept reference must resolve;
+// extends joins compatible kinds only, without a cycle; values-of and units-of
+// name entities (a child may narrow its parent's, never change it); measures
+// are computed from attributes and measures and grouped by dimensions and
+// attributes; a ratio is never summed; every modelspec:// binding must name an
+// existing entity and property that fits its role (identifier and display-name
+// on the concept's own entity, one entity binding per concept, a foreign key
+// to the entity of its target concept); and values must cover the data they
+// describe.
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import Ajv2020 from 'ajv/dist/2020.js';
@@ -16,13 +19,14 @@ import { parse as parseYaml } from 'yaml';
 import { parseHcl, toModelspecJson } from './modelspec.mjs';
 
 // Where meaning:// repositories are read from, keyed by {host}/{org}/{repo}.
-// `dir` reads a local copy (relative to the repository root). `git` fetches
-// the repository at the ?ref= pin that the references carry. The vendored copy
-// stands in for github.com/meaninggraph/core until that public repository
-// exists; switching to it is this one line:
-//   'github.com/meaninggraph/core': { git: 'https://github.com/meaninggraph/core' },
+// `git` fetches the repository at the ?ref= pin that the references carry (see
+// checkoutGit); `dir` reads a local directory (relative to the repository
+// root). The universal concepts and the meaning-file schema both come from
+// the one pinned checkout of github.com/meaninggraph/core: the resolver
+// returns its `dir`, and nothing else names a path inside it.
+export const coreRepo = 'github.com/meaninggraph/core';
 export const meaningSources = {
-  'github.com/meaninggraph/core': { dir: 'model/vendor/meaninggraph-core' },
+  [coreRepo]: { git: 'https://github.com/meaninggraph/core' },
 };
 
 const conceptId = '[a-z][a-z0-9]*(?:-[a-z][a-z0-9]*)*';
@@ -61,13 +65,14 @@ export function schemaProblems(doc, schemaPath) {
   return validate.errors.map((error) => `${error.instancePath || '/'} ${error.message}${error.params?.allowedValues ? ` (${error.params.allowedValues.join(', ')})` : ''}${error.params?.additionalProperty ? ` (${error.params.additionalProperty})` : ''}`);
 }
 
-// Loads every *.meaning.yaml in `dir` as one repository's concepts.
+// Loads every *.meaning.yaml file directly in `dir` (the repository root; subdirectories are not
+// searched) as one repository's concepts. The result also carries `dir`.
 export function loadMeaningDir(dir) {
-  const files = readdirSync(dir).filter((name) => name.endsWith('.meaning.yaml')).sort().map((name) => {
+  const files = readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isFile() && entry.name.endsWith('.meaning.yaml')).map((entry) => entry.name).sort().map((name) => {
     const path = join(dir, name);
     return { path, doc: parseYaml(readFileSync(path, 'utf8')) };
   });
-  return indexConcepts(files);
+  return { ...indexConcepts(files), dir };
 }
 
 export function indexConcepts(files) {
@@ -82,26 +87,96 @@ export function indexConcepts(files) {
   return { files, concepts, problems };
 }
 
-function checkoutGit(url, ref) {
-  const dir = mkdtempSync(join(tmpdir(), 'meaning-source-'));
-  const git = (...args) => execFileSync('git', args, { stdio: 'pipe' });
-  git('init', '-q', dir);
-  git('-C', dir, 'fetch', '-q', '--depth', '1', url, ref);
-  git('-C', dir, 'checkout', '-q', 'FETCH_HEAD');
-  return dir;
+// Every meaning:// reference written anywhere in a meaning file, parsed.
+export function conceptReferences(doc) {
+  const found = [];
+  const walk = (value) => {
+    if (typeof value === 'string') { const parsed = value.startsWith('meaning://') && parseConceptRef(value); if (parsed) found.push(parsed); }
+    else if (value && typeof value === 'object') Object.values(value).forEach(walk);
+  };
+  walk(doc);
+  return found;
 }
 
-// Resolves meaning:// repositories through `sources` (see meaningSources).
-export function createResolver({ root, sources = meaningSources }) {
+// The distinct ?ref= pins that a meaning file's references to `repo` carry.
+export const pinsOf = (doc, repo) => [...new Set(conceptReferences(doc).filter((ref) => ref.repo === repo).map((ref) => ref.ref ?? ''))].sort();
+
+const commit = /^[0-9a-f]{40}$/;
+// Errors that another attempt cannot fix (the ref or repository is not there).
+const permanentFailure = /couldn't find remote ref|not our ref|invalid refspec|not found|does not appear to be a git repository|could not read from remote|authentication failed/i;
+const gitFailure = (error) => String(error.stderr ?? error.message).trim().split('\n').filter(Boolean).pop() ?? 'git failed';
+const defaultRun = (command, args) => execFileSync(command, args, { stdio: 'pipe', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }).toString();
+const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+// Fetches `ref` of the git repository at `url` and returns { dir, release }.
+// A full commit id is immutable, so with a `cacheDir` the checkout is kept
+// there under that id (a CI cache may restore it) and reused after a check
+// that it still is that commit with no local changes; `release` then does
+// nothing. Any other ref, or no cacheDir, uses a temporary clone that
+// `release` removes (in `tempDir`). A failed fetch is retried (`retries` attempts, a growing
+// pause between them) and never leaves a clone behind. `run(command, args)`
+// runs git; tests replace it.
+export function checkoutGit(url, ref, { cacheDir, tempDir = tmpdir(), run = defaultRun, retries = 3, retryDelayMs = 1000 } = {}) {
+  const git = (dir, ...args) => run('git', ['-C', dir, ...args]);
+  const headIs = (dir, expected) => { try { return git(dir, 'rev-parse', 'HEAD').trim() === expected && git(dir, 'status', '--porcelain').trim() === ''; } catch { return false; } };
+  const kept = cacheDir && commit.test(ref) ? join(cacheDir, ref) : null;
+  if (kept && existsSync(kept)) {
+    if (headIs(kept, ref)) return { dir: kept, release() {} };
+    rmSync(kept, { recursive: true, force: true });
+  }
+  const parent = kept ? cacheDir : tempDir;
+  mkdirSync(parent, { recursive: true });
+  const work = mkdtempSync(join(parent, '.meaning-source-'));
+  let done = false;
+  try {
+    run('git', ['init', '-q', work]);
+    for (let attempt = 1; ; attempt++) {
+      try { git(work, 'fetch', '-q', '--depth', '1', url, ref); break; } catch (error) {
+        if (attempt >= retries || permanentFailure.test(gitFailure(error))) throw new Error(`cannot fetch ${ref} from ${url}: ${gitFailure(error)}`);
+        pause(retryDelayMs * attempt);
+      }
+    }
+    git(work, 'checkout', '-q', 'FETCH_HEAD');
+    if (commit.test(ref) && !headIs(work, ref)) throw new Error(`${url} at ${ref} did not check out that commit`);
+    if (kept && !existsSync(kept)) renameSync(work, kept);
+    done = true;
+  } finally {
+    if (!done || kept) rmSync(work, { recursive: true, force: true });
+  }
+  return kept ? { dir: kept, release() {} } : { dir: work, release: () => rmSync(work, { recursive: true, force: true }) };
+}
+
+// The cache for checkouts of immutable commits: MEANING_CACHE_DIR, or .cache/meaning-sources
+// under the repository root (git-ignored; CI restores it keyed by the meaning files).
+export const defaultCacheDir = (root) => process.env.MEANING_CACHE_DIR || join(root, '.cache', 'meaning-sources');
+
+// Resolves meaning:// repositories through `sources` (see meaningSources) to
+// { dir, files, concepts, problems } or { error }. Call `.dispose()` when done:
+// it removes the temporary clones of refs that are not immutable commits.
+export function createResolver({ root, sources = meaningSources, cacheDir = defaultCacheDir(root), run } = {}) {
   const cache = new Map();
-  return (repo, ref) => {
+  const releases = [];
+  const resolve = (repo, ref) => {
     const source = sources[repo];
     if (!source) return { error: `no source configured for meaning://${repo}` };
     if (source.git && !ref) return { error: `meaning://${repo} is read from git and needs a ?ref= pin` };
     const key = `${repo}@${ref ?? ''}`;
-    if (!cache.has(key)) cache.set(key, loadMeaningDir(source.dir ? join(root, source.dir) : checkoutGit(source.git, ref)));
+    if (!cache.has(key)) {
+      try {
+        if (source.dir) cache.set(key, loadMeaningDir(join(root, source.dir)));
+        else {
+          const checkout = checkoutGit(source.git, ref, { cacheDir, run });
+          releases.push(checkout.release);
+          cache.set(key, loadMeaningDir(checkout.dir));
+        }
+      } catch (error) {
+        cache.set(key, { error: `meaning://${repo}?ref=${ref} cannot be read: ${error.message}` });
+      }
+    }
     return cache.get(key);
   };
+  resolve.dispose = () => { for (const release of releases.splice(0)) release(); cache.clear(); };
+  return resolve;
 }
 
 function loadModels(file, doc) {
@@ -196,16 +271,20 @@ export function matchValues(values, stored, match = 'labels') {
 
 // Checks one repository's meaning files: `local` is the result of
 // loadMeaningDir (or indexConcepts), `resolve` reads other repositories.
-// Returns a list of problems; empty means the files are consistent.
-export function checkMeaning({ local, resolve, schemaPath, models: givenModels }) {
+// `selfRepo` is the repository's own {host}/{org}/{repo}: a meaning://
+// reference to it is a reference to `local`. Returns a list of problems; empty
+// means the files are consistent.
+export function checkMeaning({ local, resolve: resolveOther, schemaPath, models: givenModels, selfRepo }) {
   const problems = [...local.problems];
+  const resolve = (repo, ref) => (selfRepo !== undefined && repo === selfRepo ? local : resolveOther(repo, ref));
   // One pin per referenced repository across all of this repository's files:
   // the repository resolves against one version of each dependency.
   const pins = new Map();
   const lookup = (ref, where) => {
     const parsed = parseConceptRef(ref);
     if (!parsed) { problems.push(`${where}: ${ref} is not a concept reference`); return null; }
-    if (!parsed.repo) {
+    if (!parsed.repo || parsed.repo === selfRepo) {
+      if (parsed.repo && parsed.ref !== undefined) problems.push(`${where}: ${ref} pins this repository's own concept; a reference to the repository itself cannot carry ?ref=`);
       const found = local.concepts.get(parsed.id);
       if (!found) problems.push(`${where}: concept ${parsed.id} is not declared in this repository`);
       return found ? { concept: found.concept, repo: local } : null;
@@ -220,7 +299,8 @@ export function checkMeaning({ local, resolve, schemaPath, models: givenModels }
     return found ? { concept: found.concept, repo: remote } : null;
   };
   // ModelSpec entities whose rows are instances of a concept (role entity).
-  const instanceEntities = (node) => (node?.concept.bindings ?? []).filter((b) => b.role === 'entity').map((b) => parseModelRef(b.model)?.name).filter(Boolean);
+  const entityBindings = (concept) => (concept.bindings ?? []).filter((b) => b.role === 'entity').map((b) => parseModelRef(b.model)).filter(Boolean);
+  const sameEntity = (a, b) => a.repo === b.repo && a.module === b.module && a.name === b.name;
   for (const file of local.files) {
     const { path, doc } = file;
     if (schemaPath) problems.push(...schemaProblems(doc, schemaPath).map((problem) => `${path}: schema: ${problem}`));
@@ -242,11 +322,11 @@ export function checkMeaning({ local, resolve, schemaPath, models: givenModels }
         const parent = lookup(concept.extends, `${where} extends`);
         const allowed = extendsCompatibility[concept.kind] ?? [];
         if (parent && !allowed.includes(parent.concept.kind)) problems.push(`${where}: ${an(concept.kind)} cannot extend ${concept.extends}, which is ${an(parent.concept.kind)}; extends means "is a kind of", and ${an(concept.kind)} may extend only ${allowed.join(' or ')}`);
-        const chain = [concept.id];
-        for (let next = concept.extends; next && parseConceptRef(next)?.repo === undefined;) {
-          if (chain.includes(next)) { problems.push(`${where}: extends forms a cycle (${[...chain, next].join(' -> ')})`); break; }
-          chain.push(next);
-          next = local.concepts.get(next)?.concept.extends;
+        // The chain of extends, through any repository, comes back to a concept it has passed.
+        const seen = [concept];
+        for (let node = resolveConcept(concept.extends, local, resolve); node; node = resolveConcept(node.concept.extends, node.repo, resolve)) {
+          if (seen.includes(node.concept)) { problems.push(`${where}: extends forms a cycle (${[...seen, node.concept].map((c) => c.id).join(' -> ')})`); break; }
+          seen.push(node.concept);
         }
       }
       for (const key of ['values-of', 'units-of']) {
@@ -255,13 +335,16 @@ export function checkMeaning({ local, resolve, schemaPath, models: givenModels }
         if (target && target.concept.kind !== 'entity') problems.push(`${where}: ${key} names ${concept[key]}, which is ${an(target.concept.kind)}, not an entity`);
       }
       // A kind of an attribute whose values are instances of X holds instances
-      // of X, or of a kind of X: values-of may narrow an inherited one, never change it.
-      if (concept['values-of'] && concept.extends) {
+      // of X, or of a kind of X; a kind of an amount in units that are instances
+      // of Y has units that are instances of Y, or of a kind of Y: values-of and
+      // units-of may narrow an inherited one, never change it.
+      for (const key of ['values-of', 'units-of']) {
+        if (!concept[key] || !concept.extends) continue;
         const parent = resolveConcept(concept.extends, local, resolve);
-        const domain = parent && inherited(parent.concept, parent.repo, 'values-of', resolve);
-        const required = domain && resolveConcept(domain.concept['values-of'], domain.repo, resolve);
-        const own = resolveConcept(concept['values-of'], local, resolve);
-        if (required && own && !lineage(own.concept, own.repo, resolve).some((node) => node.concept === required.concept)) problems.push(`${where}: values-of ${concept['values-of']} is neither ${domain.concept['values-of']} nor a kind of it, which ${concept.extends} requires`);
+        const domain = parent && inherited(parent.concept, parent.repo, key, resolve);
+        const required = domain && resolveConcept(domain.concept[key], domain.repo, resolve);
+        const own = resolveConcept(concept[key], local, resolve);
+        if (required && own && !lineage(own.concept, own.repo, resolve).some((node) => node.concept === required.concept)) problems.push(`${where}: ${key} ${concept[key]} is neither ${domain.concept[key]} nor a kind of it, which ${concept.extends} requires`);
       }
       // With units-of (own or inherited) the unit names one value of that entity.
       const unitDomain = concept.unit && inherited(concept, local, 'units-of', resolve);
@@ -300,6 +383,8 @@ export function checkMeaning({ local, resolve, schemaPath, models: givenModels }
           }
         }
       }
+      const entities = entityBindings(concept);
+      if (entities.length > 1) problems.push(`${where}: has ${entities.length} entity bindings (${entities.map((e) => `${e.module}.${e.name}`).join(', ')}); a concept binds one entity`);
       for (const binding of concept.bindings ?? []) {
         const parsed = parseModelRef(binding.model);
         if (!parsed) { problems.push(`${where}: ${binding.model} is not a modelspec:// reference`); continue; }
@@ -312,6 +397,11 @@ export function checkMeaning({ local, resolve, schemaPath, models: givenModels }
         const member = entity.properties?.[binding.property];
         if (!member) { problems.push(`${where}: ${binding.model}: entity ${parsed.name} has no property ${binding.property}`); continue; }
         const at = `${where}: ${parsed.name}.${binding.property}`;
+        // identifier and display-name describe the rows of the concept's own entity.
+        if (binding.role === 'identifier' || binding.role === 'display-name') {
+          if (entities.length === 0) problems.push(`${at} has role ${binding.role}, but ${concept.id} has no entity binding, so it cannot be checked which entity the property must sit on`);
+          else if (entities.length === 1 && !sameEntity(entities[0], parsed)) problems.push(`${at} has role ${binding.role}, but ${concept.id} is bound to the entity ${entities[0].name}; the property must be on that entity`);
+        }
         if (binding.role === 'identifier' && !(entity.key ?? []).includes(binding.property)) problems.push(`${at} has role identifier but is not in the key of ${parsed.name} [${(entity.key ?? []).join(', ')}]`);
         if (binding.role === 'display-name' && member.type !== 'string') problems.push(`${at} has role display-name but is ${member.entity ? `a reference to ${member.entity}` : an(member.type)}, not a string`);
         if (binding.role === 'value' && member.entity) problems.push(`${at} has role value but is a reference to ${member.entity}; bind it with role foreign-key`);
@@ -326,8 +416,11 @@ export function checkMeaning({ local, resolve, schemaPath, models: givenModels }
             if (!domain) { problems.push(`${at} has role foreign-key, so ${concept.id} needs values-of: the entity its references point at`); continue; }
             target = resolveConcept(domain.concept['values-of'], domain.repo, resolve);
           }
-          const expected = instanceEntities(target);
-          if (expected.length > 0 && !expected.includes(member.entity)) problems.push(`${at} references ${member.entity}, but the instances of ${target.concept.id} are ${expected.join(', ')} rows`);
+          if (!target) continue; // an unresolvable values-of is reported above
+          // Only this repository's own bindings name models this check can read.
+          const expected = target.repo === local ? entityBindings(target.concept) : [];
+          if (expected.length === 0) problems.push(`${at} has role foreign-key, but ${target.concept.id} has no entity binding in this repository, so it cannot be checked that ${member.entity} holds its instances; bind ${target.concept.id} (or a concept of this repository that extends it) to its entity`);
+          else if (!expected.some((e) => e.module === parsed.module && e.name === member.entity)) problems.push(`${at} references ${member.entity}, but the instances of ${target.concept.id} are ${expected.map((e) => e.name).join(', ')} rows`);
         }
       }
     }

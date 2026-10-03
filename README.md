@@ -70,7 +70,8 @@ engine. Both are drafts.
   say in words how they are computed and link the saved query that computes
   them; external data (World Bank population) names its provider, dataset,
   year and licence. The format is a draft, `meaning/draft-1`, defined by the
-  JSON Schema `model/vendor/meaninggraph-core/meaning.schema.json`.
+  JSON Schema `meaning.schema.json` in
+  [`meaninggraph/core`](https://github.com/meaninggraph/core).
 
 Concepts that are not specific to Chinook (country with its ISO 3166 codes and
 spellings such as "USA", currency, customer, invoice, price, revenue, date,
@@ -86,10 +87,23 @@ them, and they mean different things:
   The known values that the data is checked against ("USA" is the United
   States) come from this key only.
 
-The universal concepts live at `meaning://github.com/meaninggraph/core/<concept>`.
-That public repository does not exist yet, so `model/vendor/meaninggraph-core/`
-holds a **temporary, byte-for-byte copy** that the checks resolve against;
-`model/vendor/README.md` says how to switch to the real repository.
+The universal concepts and the meaning-file schema both come from the public
+repository [`meaninggraph/core`](https://github.com/meaninggraph/core), and
+nothing from it is copied into this one. A concept is referred to as
+`meaning://github.com/meaninggraph/core/<concept>?ref=<commit>`, and every
+reference carries the same full 40-character commit id (the check fails on a
+mix, and on a branch or tag in place of a commit). To move to a newer version,
+change that id in every reference of `model/chinook.meaning.yaml` and run
+`pnpm test:model`.
+
+`pnpm test:model` fetches that one commit (a shallow `git fetch` of the pinned
+id into `.cache/meaning-sources/<commit>`, retried on network errors, git-ignored)
+and reads the concepts and the schema from the same checkout; the resolver in
+`scripts/lib/meaning.mjs` returns its directory and nothing else names a path
+in it. The commit is immutable, so a checkout kept under its id is reused
+without touching the network after it is verified to still be that commit with
+no local changes; CI caches the directory keyed by the meaning files. Set
+`MEANING_CACHE_DIR` to keep the cache elsewhere.
 
 `pnpm test:model` checks, and fails CI when:
 
@@ -100,15 +114,21 @@ holds a **temporary, byte-for-byte copy** that the checks resolve against;
   verify is itself an error), compared with `public/data/chinook.json` and
   `src/data/schema.json`;
 - the model is not structurally valid ModelSpec;
-- the meaning file or the universal concepts break the schema, or any
-  reference does not resolve (`modelspec://` to an existing entity and
-  property, concept references to existing concepts);
-- the meaning is inconsistent: `extends` joins incompatible kinds, `values-of`
-  or `units-of` names something that is not an entity, a unit names no
-  currency, a measure is computed from an entity or grouped by something that
-  is not a dimension or attribute, a ratio is summed, or a binding's role does
-  not fit the model (an identifier that is not the key, a foreign key that
-  points at the wrong entity);
+- the meaning file, or the universal concepts at the pinned commit, break the
+  schema, or any reference does not resolve (`modelspec://` to an existing
+  entity and property, concept references to existing concepts, a pin that does
+  not exist, a concept id that is missing at the pin);
+- the meaning is inconsistent: `extends` joins incompatible kinds or forms a
+  cycle (also through a `meaning://` reference to this repository itself),
+  `values-of` or `units-of` names something that is not an entity or changes
+  what the parent concept names (a child may narrow it, never change it), a
+  unit names no currency, a measure is computed from an entity or grouped by
+  something that is not a dimension or attribute, a ratio is summed, or a
+  binding's role does not fit the model: an identifier or display name that is
+  not on the concept's own entity (or not the key, or not a string), a concept
+  with more than one `entity` binding, a foreign key that points at the wrong
+  entity, or one whose target concept has no entity binding (the check then
+  says it cannot check);
 - a country spelling stored in the data matches no country, or more than one;
 - the facts the meaning file states (412 invoices from 2021-01-01 to
   2025-12-22, totals equal their lines, billing country equals the customer's
@@ -187,13 +207,22 @@ The data keeps that licence.
 
 This repository's own work is licensed in two parts:
 
-- **MIT** ([`LICENSE`](LICENSE)): the site code, the scripts and the ModelSpec
-  model (`model/chinook.modelspec.hcl` and its generated JSON). The model
+- **MIT** ([`LICENSE`](LICENSE)): the site code, the scripts, the ModelSpec
+  model (`model/chinook.modelspec.hcl` and its generated JSON), the
+  documentation under `docs/`, and the generated checksum files
+  (`model/checksums.json` and `public/data/metadata/checksums.json`). The model
   restates the upstream schema, so the upstream MIT notice applies to it too.
 - **CC0-1.0** ([`LICENSE-CC0`](LICENSE-CC0)): the meaning file
-  `model/chinook.meaning.yaml` and the vendored universal concepts and schema
-  in `model/vendor/meaninggraph-core/` (which carry their own copy of the CC0
-  text). Copy them without attribution.
+  `model/chinook.meaning.yaml`. Copy it without attribution. The universal
+  concepts and schema it uses are not here; they are CC0-1.0 in
+  [`meaninggraph/core`](https://github.com/meaninggraph/core).
+
+The published HCL carries its licence in a comment at the top, the meaning
+file in its `license` field, and `/about/` states all of them. The generated
+ModelSpec JSON cannot: JSON has no comments and the ModelSpec JSON format has no
+metadata field for a licence (its top level is `modelspec`, `module` and the
+model's own sections), so it is MIT as the HCL it is generated from.
+
 ChinookDB.com is an independent hosted resource and is not the official
 upstream project. See [/about/](/about/) and the
 [upstream repository](https://github.com/lerocha/chinook-database).

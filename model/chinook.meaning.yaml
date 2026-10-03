@@ -7,7 +7,8 @@ description: >-
   people use for it, and which ModelSpec entity or property holds it, in which
   role. Concepts that are not specific to Chinook (country, currency,
   customer, invoice, price, revenue, date, population, per capita) are reused
-  from the universal concepts at meaning://github.com/meaninggraph/core.
+  from the universal concepts at meaning://github.com/meaninggraph/core, each
+  reference pinned to one commit with ?ref=.
 license: CC0-1.0
 models:
   chinook: chinook.modelspec.hcl
@@ -110,7 +111,7 @@ concepts:
   - id: list-price
     kind: attribute
     of: track
-    extends: meaning://github.com/meaninggraph/core/price
+    extends: meaning://github.com/meaninggraph/core/price?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
     labels:
       en: List price
       ru: Цена трека
@@ -191,7 +192,7 @@ concepts:
 
   - id: customer
     kind: entity
-    extends: meaning://github.com/meaninggraph/core/customer
+    extends: meaning://github.com/meaninggraph/core/customer?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
     labels:
       en: Customer
       ru: Клиент
@@ -207,7 +208,7 @@ concepts:
   - id: customer-country
     kind: attribute
     of: customer
-    values-of: meaning://github.com/meaninggraph/core/country
+    values-of: meaning://github.com/meaninggraph/core/country?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
     labels:
       en: Customer country
       ru: Страна клиента
@@ -225,7 +226,7 @@ concepts:
 
   - id: employee
     kind: entity
-    extends: meaning://github.com/meaninggraph/core/employee
+    extends: meaning://github.com/meaninggraph/core/employee?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
     labels:
       en: Employee
       ru: Сотрудник
@@ -237,7 +238,7 @@ concepts:
   - id: manager
     kind: attribute
     of: employee
-    extends: meaning://github.com/meaninggraph/core/manager
+    extends: meaning://github.com/meaninggraph/core/manager?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
     values-of: employee
     labels:
       en: Manager
@@ -268,7 +269,7 @@ concepts:
 
   - id: invoice
     kind: entity
-    extends: meaning://github.com/meaninggraph/core/invoice
+    extends: meaning://github.com/meaninggraph/core/invoice?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
     labels:
       en: Invoice
       ru: Счёт
@@ -290,7 +291,7 @@ concepts:
   - id: invoice-date
     kind: dimension
     of: invoice
-    extends: meaning://github.com/meaninggraph/core/date
+    extends: meaning://github.com/meaninggraph/core/date?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
     labels:
       en: Invoice date
       ru: Дата счёта
@@ -306,7 +307,7 @@ concepts:
   - id: billing-country
     kind: dimension
     of: invoice
-    values-of: meaning://github.com/meaninggraph/core/country
+    values-of: meaning://github.com/meaninggraph/core/country?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
     labels:
       en: Country
       ru: Страна
@@ -330,7 +331,7 @@ concepts:
   - id: invoice-line
     kind: entity
     of: invoice
-    extends: meaning://github.com/meaninggraph/core/invoice-line
+    extends: meaning://github.com/meaninggraph/core/invoice-line?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
     labels:
       en: Invoice line
       ru: Строка счёта
@@ -342,7 +343,7 @@ concepts:
   - id: invoice-total
     kind: attribute
     of: invoice
-    extends: meaning://github.com/meaninggraph/core/invoice-total
+    extends: meaning://github.com/meaninggraph/core/invoice-total?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
     labels:
       en: Invoice total
       ru: Сумма счёта
@@ -358,7 +359,7 @@ concepts:
   - id: unit-price
     kind: attribute
     of: invoice-line
-    extends: meaning://github.com/meaninggraph/core/unit-price
+    extends: meaning://github.com/meaninggraph/core/unit-price?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
     labels:
       en: Unit price
       ru: Цена за единицу
@@ -372,7 +373,7 @@ concepts:
   - id: quantity
     kind: attribute
     of: invoice-line
-    extends: meaning://github.com/meaninggraph/core/quantity
+    extends: meaning://github.com/meaninggraph/core/quantity?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
     labels:
       en: Quantity
       ru: Количество
@@ -385,7 +386,7 @@ concepts:
 
   - id: music-sales
     kind: measure
-    extends: meaning://github.com/meaninggraph/core/revenue
+    extends: meaning://github.com/meaninggraph/core/revenue?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
     labels:
       en: Music sales
       ru: Продажи музыки
@@ -408,19 +409,13 @@ concepts:
       - model: modelspec:///chinook.Invoice
         property: Total
         role: value
-      - model: modelspec:///chinook.InvoiceLine
-        property: UnitPrice
-        role: value
-      - model: modelspec:///chinook.InvoiceLine
-        property: Quantity
-        role: value
 
   # Per capita: the hero question
   # "Which countries buy the most music relative to their population?"
 
   - id: population
     kind: measure
-    extends: meaning://github.com/meaninggraph/core/population
+    extends: meaning://github.com/meaninggraph/core/population?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
     source: world-bank-population
     labels:
       en: Population
@@ -438,7 +433,7 @@ concepts:
 
   - id: music-sales-per-capita
     kind: measure
-    extends: meaning://github.com/meaninggraph/core/per-capita
+    extends: meaning://github.com/meaninggraph/core/per-capita?ref=4214bc73cbfcc706c0ea9c8873eba991d9ddbb91
     labels:
       en: Music sales per million people
       ru: Продажи музыки на миллион человек

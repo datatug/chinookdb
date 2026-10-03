@@ -46,10 +46,7 @@ for (const [path, type] of [
   ['/model/chinook.modelspec.hcl', 'text/plain; charset=utf-8'],
   ['/model/chinook.modelspec.json', 'application/json; charset=utf-8'],
   ['/model/chinook.meaning.yaml', 'application/yaml; charset=utf-8'],
-  ['/model/vendor/meaninggraph-core/meaning.schema.json', 'application/json; charset=utf-8'],
-  ['/model/vendor/README.md', 'text/markdown; charset=utf-8'],
   ['/model/checksums.json', 'application/json; charset=utf-8'],
-  ['/model/vendor/meaninggraph-core/geo.meaning.yaml', 'application/yaml; charset=utf-8'],
 ] as const) {
   const response = await request(path);
   assert.equal(response.status, 200, path);
@@ -57,10 +54,16 @@ for (const [path, type] of [
   assert.equal(response.headers.get('Access-Control-Allow-Origin'), '*', path);
   assert.deepEqual(new Uint8Array(await response.arrayBuffer()), new Uint8Array(await readFile(join(root, path.slice(1)))), `${path} is published byte for byte from model/`);
 }
+for (const gone of ['/model/vendor/README.md', '/model/vendor/meaninggraph-core/meaning.schema.json', '/model/vendor/meaninggraph-core/geo.meaning.yaml']) assert.equal((await request(gone)).status, 404, `${gone} is no longer published: the universal concepts and schema live in github.com/meaninggraph/core`);
+const published = JSON.parse(await readFile(join(root, 'model/checksums.json'), 'utf8')) as { files: Record<string, unknown> };
+assert.deepEqual(Object.keys(published.files), ['chinook.meaning.yaml', 'chinook.modelspec.hcl', 'chinook.modelspec.json'], 'the checksums list exactly the files this repository publishes under /model/');
 const modelPage = await request('/model/');
 assert.equal(modelPage.status, 200);
 assert.equal(modelPage.headers.get('Access-Control-Allow-Origin'), null, 'the /model/ page is a page, not a data file');
-assert.match(await modelPage.text(), /chinook\.meaning\.yaml/);
+const modelPageText = await modelPage.text();
+assert.match(modelPageText, /chinook\.meaning\.yaml/);
+assert.doesNotMatch(modelPageText, /vendor/, 'the model page no longer points at a vendored copy');
+assert.match(modelPageText, /https:\/\/github\.com\/meaninggraph\/core\/tree\/[0-9a-f]{40}/, 'the model page links the pinned commit of meaninggraph/core');
 assert.equal((await request('/model/missing.yaml')).status, 404);
 
 const discovery = await request('/.well-known/openvaultdb');
