@@ -10,20 +10,32 @@ import { parse as parseYaml } from 'yaml';
 // file that git tracks at HEAD: not a directory, a symlink, an untracked file or an ignored one (the
 // Directory reads the pinned commit, where only tracked files exist).
 //
-// `files` supplies the repository: read(path) returns a file's text, and kind(path) says what the
-// path is at HEAD: 'file', 'directory', 'symlink', 'untracked', 'ignored' or 'missing'.
+// `files` supplies the repository: read(path) returns a file's text as HEAD holds it (not the working
+// tree), and kind(path) says what the path is at HEAD: 'file', 'directory', 'symlink', 'untracked',
+// 'ignored' or 'missing'. Both look at the same commit, so an uncommitted edit is never checked.
 // checkOvdbManifest returns a list of problems; empty means the manifest is good.
+//
+// A manifest names its ModelSpec model one of two ways. By local files: `model.modelspec` (the JSON)
+// and `model.hcl` (the source, which the Directory index reports as `model.path`), plus an optional
+// `model.address` that must be this repository's own address for the model, without a ref. Or by
+// `model.address` alone, pinned with `?ref=<40 hex>`, when the model lives in another repository.
 
 const manifestFormat = 'ovdb-manifest/draft-1';
 const globChars = /[*?[\]{}\\]/;
-const licenceId = /^[A-Za-z0-9][A-Za-z0-9.+-]*$/;
+// The SPDX identifiers a manifest may use for a licence. Small on purpose; add one when a database needs it.
+export const licenceIds = [
+  '0BSD', 'AGPL-3.0-only', 'Apache-2.0', 'BSD-2-Clause', 'BSD-3-Clause', 'CC-BY-4.0', 'CC-BY-SA-4.0', 'CC0-1.0',
+  'GPL-2.0-only', 'GPL-3.0-only', 'ISC', 'LGPL-3.0-only', 'MIT', 'MPL-2.0', 'ODC-By-1.0', 'ODbL-1.0', 'PDDL-1.0', 'Unlicense',
+];
+// modelspec://github.com/<org>/<repo>/<module>, optionally pinned with ?ref=<40 hex>. Nothing else.
+const modelAddress = /^modelspec:\/\/github\.com\/([A-Za-z0-9][A-Za-z0-9-]*)\/([A-Za-z0-9._-]+)\/([A-Za-z0-9][A-Za-z0-9._-]*)(\?ref=[0-9a-f]{40})?$/;
 const discoveryPath = '/.well-known/openvaultdb';
 
 // The keys a manifest may have. Anything else is refused, so a stray secret cannot ride along.
 const allowedKeys = {
   '': ['format', 'id', 'title', 'description', 'url', 'deployment', 'model', 'meaning', 'publisher', 'licences', 'recordsets'],
   deployment: ['url', 'engine', 'discovery', 'recordset_page'],
-  model: ['modelspec', 'hcl'],
+  model: ['modelspec', 'hcl', 'address'],
   meaning: ['file', 'graph'],
   'meaning.graph': ['id', 'address'],
   publisher: ['name', 'url', 'repository'],
@@ -32,12 +44,21 @@ const allowedKeys = {
 
 // A repository on disk, read through git. kind() asks git what HEAD holds at the path.
 export function gitRepoFiles(root) {
-  const git = (...args) => execFileSync('git', ['-C', root, ...args], { stdio: 'pipe' }).toString();
+  // --literal-pathspecs: a path is a path, never pathspec magic such as `:/` or `:(icase)`.
+  const run = (flags, args) => execFileSync('git', [...flags, '-C', root, ...args], { stdio: 'pipe' }).toString();
+  const git = (...args) => run(['--literal-pathspecs'], args);
   return {
-    read: (path) => readFileSync(join(root, path), 'utf8'),
+    read: (path) => git('cat-file', 'blob', `HEAD:${path}`),
     kind(path) {
-      const [entry] = git('ls-tree', '-z', 'HEAD', '--', path).split('\0');
-      if (entry) {
+      let entry;
+      try {
+        entry = git('ls-tree', '-z', 'HEAD', '--', path).split('\0')[0];
+      } catch {
+        return 'missing'; // git refused the path outright
+      }
+      // `<mode> <type> <sha>\t<path>`; only an entry for exactly the requested path counts.
+      const tab = entry.indexOf('\t');
+      if (tab >= 0 && entry.slice(tab + 1) === path) {
         const mode = entry.split(' ')[0];
         if (mode === '040000') return 'directory';
         if (mode === '120000') return 'symlink';
@@ -45,7 +66,7 @@ export function gitRepoFiles(root) {
       }
       if (!existsSync(join(root, path))) return 'missing';
       try {
-        git('check-ignore', '-q', '--no-index', '--', path);
+        run([], ['check-ignore', '-q', '--no-index', '--', path]); // check-ignore refuses --literal-pathspecs; a path that git cannot take is not ignored
         return 'ignored';
       } catch {
         return 'untracked';
@@ -185,6 +206,7 @@ export function checkManifest(path, files, { repository } = {}) {
   const page = deployment?.recordset_page;
   if (page !== undefined) {
     if (!isText(page) || page.split('{name}').length !== 2) bad('deployment.recordset_page must contain {name} exactly once');
+    else if (/[{}]/.test(page.replace('{name}', ''))) bad('deployment.recordset_page may contain only the {name} placeholder, no other { or }');
     else {
       const expanded = checkUrl(page.replace('{name}', 'Name'), 'deployment.recordset_page');
       if (expanded && deployed && expanded.origin !== deployed.origin) bad(`deployment.recordset_page must be on the origin of deployment.url (${deployed.origin})`);
@@ -210,16 +232,27 @@ export function checkManifest(path, files, { repository } = {}) {
   for (const field of ['model', 'meaning', 'data']) {
     const value = manifest.licences?.[field];
     if (!isText(value)) bad(`licences.${field} is required`);
-    else if (!licenceId.test(value)) bad(`licences.${field} must be an SPDX licence id`);
+    else if (!licenceIds.includes(value)) bad(`licences.${field} must be a known SPDX licence id (${licenceIds.join(', ')}), got ${JSON.stringify(value)}`);
   }
 
+  // The model is named by local files or by an address in another repository (see the top of this file).
+  const model = manifest.model;
+  const address = model?.address;
+  const addressParts = typeof address === 'string' ? modelAddress.exec(address) : null;
+  if (address !== undefined && !addressParts) {
+    bad(`model.address must be modelspec://github.com/<org>/<repository>/<module>, optionally followed by ?ref=<40 hex>, got ${JSON.stringify(address)}`);
+  }
+  const local = model?.modelspec !== undefined || model?.hcl !== undefined;
+  if (!local && address === undefined) bad('model must name the model by local files (model.modelspec and model.hcl) or by model.address');
+  if (!local && addressParts && !addressParts[4]) bad('model.address must carry ?ref=<40 hex> when the model is not in this repository (no local model files)');
+
   // Every file the manifest names is a tracked regular file; they are all read from the repository root.
-  const named = { 'model.modelspec': manifest.model?.modelspec, 'model.hcl': manifest.model?.hcl, 'meaning.file': manifest.meaning?.file };
-  if (!isText(named['model.modelspec'])) bad('model.modelspec is required');
+  const named = { 'model.modelspec': model?.modelspec, 'model.hcl': model?.hcl, 'meaning.file': manifest.meaning?.file };
+  if (local && !isText(named['model.modelspec'])) bad('model.modelspec is required with local model files');
+  if (local && !isText(named['model.hcl'])) bad('model.hcl is required with local model files: the Directory index takes model.path from it');
   if (!isText(named['meaning.file'])) bad('meaning.file is required');
   const readable = {};
   for (const [label, value] of Object.entries(named)) {
-    if (value === undefined && label === 'model.hcl') continue;
     if (!isText(value)) continue;
     if (!isSafePath(value)) {
       bad(`${label} ${JSON.stringify(value)} must be a file path relative to the repository root (no glob, no .., not absolute)`);
@@ -228,6 +261,28 @@ export function checkManifest(path, files, { repository } = {}) {
     const fileKind = files.kind(value);
     if (fileKind !== 'file') bad(`${label} names ${value}, which must be a tracked regular file, but it is ${fileKind}`);
     else readable[label] = value;
+  }
+
+  // With local files the address is this repository's own, for the module the model file declares, and
+  // carries no ref (the model is in the commit being read). Without them it must be pinned (above).
+  if (local && addressParts) {
+    if (addressParts[4]) bad('model.address must not carry ?ref= when the model files are in this repository');
+    let moduleName;
+    if (readable['model.modelspec']) {
+      try {
+        moduleName = JSON.parse(files.read(readable['model.modelspec'])).module?.name;
+      } catch {
+        // reported below, with the recordsets
+      }
+    }
+    if (repoParts && isText(moduleName)) {
+      const expected = `modelspec://github.com/${repoParts.owner}/${repoParts.repo}/${moduleName}`;
+      if (addressParts[0].replace(addressParts[4] ?? '', '') !== expected) {
+        bad(`model.address must be ${expected}, this repository plus the module name in ${readable['model.modelspec']}`);
+      }
+    } else if (readable['model.modelspec'] && repoParts) {
+      bad(`${readable['model.modelspec']} declares no module.name, so model.address cannot be checked`);
+    }
   }
 
   // The meaning graph is the one the meaning file declares, at the address of this repository.
@@ -254,6 +309,8 @@ export function checkManifest(path, files, { repository } = {}) {
   const recordsets = manifest.recordsets;
   if (!Array.isArray(recordsets) || recordsets.length === 0 || !recordsets.every(isText)) {
     bad('recordsets must be a non-empty list of names');
+  } else if (!local) {
+    // The model is in another repository; its entities are checked when it is registered.
   } else if (readable['model.modelspec']) {
     let entityNames;
     try {

@@ -20,7 +20,12 @@ deployment:
   # Where a recordset's page is. Clients use this template and never build the route themselves.
   recordset_page: https://cloud.openvaultdb.com/ovdb/dbs/chinook/collections/{name}
 
+# The model is named by local files (below) or, when it lives in another repository, by `address`
+# with a pinned ?ref=<40 hex>. This repository has both: its files, and its own address in the
+# ModelSpec registry (github.com/modelspec-org/registry, record `chinook`). The address is
+# repository + module name; it has no ref because the files are in this same repository.
 model:
+  address: modelspec://github.com/datatug/chinookdb/chinook
   modelspec: model/chinook.modelspec.json
   hcl: model/chinook.modelspec.hcl
 
