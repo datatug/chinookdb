@@ -65,38 +65,65 @@ engine. Both are drafts.
   people, each with English labels (and Russian ones for the concepts of the
   question "Which countries buy the most music relative to their
   population?"), synonyms, a plain description, the unit, and the ModelSpec
-  entity and property that hold it (`modelspec:///chinook.Invoice` plus
-  `property: Total`). Measures say in words how they are computed and link the
-  saved query that computes them; external data (World Bank population) names
-  its provider, dataset, year and licence. The format is a draft,
-  `meaning/draft-1`, defined by the JSON Schema `model/meaning.schema.json`.
+  entity and property that hold it, with the binding's role
+  (`modelspec:///chinook.Invoice`, `property: Total`, `role: value`). Measures
+  say in words how they are computed and link the saved query that computes
+  them; external data (World Bank population) names its provider, dataset,
+  year and licence. The format is a draft, `meaning/draft-1`, defined by the
+  JSON Schema `model/vendor/meaninggraph-core/meaning.schema.json`.
 
 Concepts that are not specific to Chinook (country with its ISO 3166 codes and
-spellings such as "USA", currency, customer, invoice, revenue, person,
-employee, population, per capita) are reused, not redefined: Chinook's
-concepts extend `meaning://github.com/meaninggraph/core/<concept>`. That
-public repository does not exist yet, so `model/vendor/meaninggraph-core/` holds
-a **temporary copy** that the checks resolve against; its README says how to
-switch to the real repository (one line in `scripts/lib/meaning.mjs`).
+spellings such as "USA", currency, customer, invoice, price, revenue, date,
+employee, population, per capita) are reused, not redefined. Two keys reuse
+them, and they mean different things:
+
+- `extends` means "is a kind of": Chinook's `invoice` is a kind of the
+  universal invoice, `list-price` a kind of price. It joins compatible kinds
+  only (an entity extends an entity, a measure a measure, an attribute or
+  dimension an attribute or dimension).
+- `values-of` means "the values of this attribute are instances of that
+  entity": `billing-country` holds countries, `support-rep` holds employees.
+  The known values that the data is checked against ("USA" is the United
+  States) come from this key only.
+
+The universal concepts live at `meaning://github.com/meaninggraph/core/<concept>`.
+That public repository does not exist yet, so `model/vendor/meaninggraph-core/`
+holds a **temporary, byte-for-byte copy** that the checks resolve against;
+`model/vendor/README.md` says how to switch to the real repository.
 
 `pnpm test:model` checks, and fails CI when:
 
 - the model and the published data disagree (a table or column added, removed
   or renamed, a changed type, length, key, reference or nullability, or a value
-  that does not fit the model), compared with `public/data/chinook.json` and
+  that does not fit the model, or breaks a stated `unique`, `pattern`,
+  `min_len`, `enum` or `format` constraint; a constraint the check cannot
+  verify is itself an error), compared with `public/data/chinook.json` and
   `src/data/schema.json`;
 - the model is not structurally valid ModelSpec;
 - the meaning file or the universal concepts break the schema, or any
   reference does not resolve (`modelspec://` to an existing entity and
   property, concept references to existing concepts);
+- the meaning is inconsistent: `extends` joins incompatible kinds, `values-of`
+  or `units-of` names something that is not an entity, a unit names no
+  currency, a measure is computed from an entity or grouped by something that
+  is not a dimension or attribute, a ratio is summed, or a binding's role does
+  not fit the model (an identifier that is not the key, a foreign key that
+  points at the wrong entity);
 - a country spelling stored in the data matches no country, or more than one;
+- the facts the meaning file states (412 invoices from 2021-01-01 to
+  2025-12-22, totals equal their lines, billing country equals the customer's
+  country) do not hold;
 - `model/chinook.modelspec.json` or `model/checksums.json` is out of date.
 
 `pnpm lint:modelspec` also validates the HCL with the SpecScore CLI
 (`specscore graph lint`, a pinned release), the ModelSpec validator available
-today. The site publishes every file under `model/` unchanged at `/model/`,
-with a summary page at [/model/](/model/); `model/checksums.json` lists each
-published file's SHA-256 and size.
+today. It does not yet check types, constraint keys and values, or that keys
+name properties ([specscore-cli#220](https://github.com/specscore/specscore-cli/issues/220)),
+and cannot export the JSON AST ([specscore-cli#221](https://github.com/specscore/specscore-cli/issues/221)),
+which is why `scripts/lib/modelspec.mjs` validates and serializes the model
+itself. The site publishes every git-tracked file under `model/` (dotfiles
+excluded) unchanged at `/model/`, with a summary page at [/model/](/model/);
+`model/checksums.json` lists each published file's SHA-256 and size.
 
 ## Deployment
 
@@ -158,11 +185,15 @@ Chinook Database is Copyright (c) 2008–2024 Luis Rocha and is distributed unde
 the MIT licence. The licence text is preserved in `data-source/UPSTREAM-LICENSE.md`.
 The data keeps that licence.
 
-The data model, the meaning file, its schema and the copy of the universal
-concepts in `model/` are this repository's own work. No licence has been chosen
-for them (or for the rest of this repository's own code) yet. The model
-restates the upstream schema, so the upstream MIT notice applies to it whatever
-licence is chosen.
+This repository's own work is licensed in two parts:
+
+- **MIT** ([`LICENSE`](LICENSE)): the site code, the scripts and the ModelSpec
+  model (`model/chinook.modelspec.hcl` and its generated JSON). The model
+  restates the upstream schema, so the upstream MIT notice applies to it too.
+- **CC0-1.0** ([`LICENSE-CC0`](LICENSE-CC0)): the meaning file
+  `model/chinook.meaning.yaml` and the vendored universal concepts and schema
+  in `model/vendor/meaninggraph-core/` (which carry their own copy of the CC0
+  text). Copy them without attribution.
 ChinookDB.com is an independent hosted resource and is not the official
 upstream project. See [/about/](/about/) and the
 [upstream repository](https://github.com/lerocha/chinook-database).

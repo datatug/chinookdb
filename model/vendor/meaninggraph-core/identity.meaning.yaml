@@ -1,7 +1,8 @@
 format: meaning/draft-1
 id: identity
-name: People and organisations
-description: People, and the roles they hold in an organisation.
+name: People and organizations
+description: People, organizations, and the roles people hold in an organization.
+license: CC0-1.0
 concepts:
   - id: person
     kind: entity
@@ -11,7 +12,17 @@ concepts:
     synonyms:
       en: [individual, people, human]
       ru: [лицо, люди]
-    description: A human being.
+    description: An individual human being.
+
+  - id: organization
+    kind: entity
+    labels:
+      en: Organization
+      ru: Организация
+    synonyms:
+      en: [organisation, company, business, firm]
+      ru: [компания, фирма, предприятие]
+    description: A group with a defined identity and purpose, such as a company.
 
   - id: employee
     kind: entity
@@ -22,15 +33,16 @@ concepts:
     synonyms:
       en: [staff member, worker, member of staff, colleague]
       ru: [работник, персонал]
-    description: A person employed by an organisation.
+    description: A person employed by an organization.
 
   - id: manager
     kind: attribute
     of: employee
+    values-of: employee
     labels:
       en: Manager
       ru: Руководитель
     synonyms:
       en: [boss, reports to, line manager, supervisor]
-      ru: [начальник, менеджер]
+      ru: [начальник]
     description: The employee that another employee reports to.

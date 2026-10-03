@@ -210,6 +210,7 @@ export function storageToModel(sqliteType) {
 }
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const verifiedFormats = ['email'];
 const datetimePattern = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 
 // Compares the model with the published data: `schema` is src/data/schema.json
@@ -249,7 +250,13 @@ export function compareModelWithData(model, schema, data) {
         if (expected.max_len !== undefined && member.max_len !== expected.max_len) problems.push(`${where} max_len is ${member.max_len}, the data allows ${expected.max_len}`);
       }
       if (Boolean(member.required) === column.nullable) problems.push(`${where} is ${member.required ? 'required' : 'optional'} in the model but ${column.nullable ? 'nullable' : 'NOT NULL'} in the data`);
+      // Every constraint the model states is checked against the rows; one
+      // this comparer cannot check is a problem, never silently accepted.
+      if (member.format !== undefined && !verifiedFormats.includes(member.format)) problems.push(`${where} format "${member.format}" is not checked against the data (checked: ${verifiedFormats.join(', ')})`);
+      const pattern = member.pattern === undefined ? null : new RegExp(`^(?:${member.pattern})$`, 'u');
+      const allowed = typeof member.enum === 'string' ? model.enums?.[member.enum]?.values : member.enum;
       const rowProblems = [];
+      const seen = new Map();
       for (const [index, row] of rows.entries()) {
         const value = row[column.name];
         if (value === null || value === undefined) {
@@ -260,7 +267,14 @@ export function compareModelWithData(model, schema, data) {
         const fits = { int: Number.isInteger(value), decimal: typeof value === 'number', string: typeof value === 'string', datetime: typeof value === 'string' && datetimePattern.test(value) }[type];
         if (!fits) rowProblems.push(`${where} row ${index} value ${JSON.stringify(value)} is not a ${type}`);
         if (member.max_len !== undefined && String(value).length > member.max_len) rowProblems.push(`${where} row ${index} is longer than ${member.max_len}`);
+        if (member.min_len !== undefined && String(value).length < member.min_len) rowProblems.push(`${where} row ${index} is shorter than ${member.min_len}`);
+        if (pattern && !pattern.test(String(value))) rowProblems.push(`${where} row ${index} value ${JSON.stringify(value)} does not match pattern ${member.pattern}`);
+        if (allowed && !allowed.includes(value)) rowProblems.push(`${where} row ${index} value ${JSON.stringify(value)} is not one of the enum values`);
         if (member.format === 'email' && !emailPattern.test(value)) rowProblems.push(`${where} row ${index} is not an email address`);
+        if (member.unique) {
+          if (seen.has(value)) rowProblems.push(`${where} is unique but rows ${seen.get(value)} and ${index} both hold ${JSON.stringify(value)}`);
+          else seen.set(value, index);
+        }
       }
       // A wrong type fails every row; three examples say enough.
       problems.push(...rowProblems.slice(0, 3));

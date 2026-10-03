@@ -1,11 +1,11 @@
 // Writes model/chinook.modelspec.json (the ModelSpec JSON AST of
 // model/chinook.modelspec.hcl) and model/checksums.json (SHA-256 and size of
-// every file published under /model/). Deterministic: running it twice
+// every git-tracked file published under /model/). Deterministic: running it twice
 // produces the same bytes.
 import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildChecksums, serializeChecksums } from './lib/checksums.mjs';
+import { buildChecksums, listTrackedFiles, serializeChecksums } from './lib/checksums.mjs';
 import { parseHcl, serializeModel, toModelspecJson, validateModel } from './lib/modelspec.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -23,8 +23,13 @@ export async function buildModelJson() {
   return serializeModel(json);
 }
 
+// The files published under /model/: git-tracked, no dotfiles. The page
+// src/pages/model/[...file].ts publishes exactly this list.
+export const listModelFiles = () => listTrackedFiles(root, 'model');
+
 export const buildModelChecksums = () => buildChecksums(modelDir, { repository: 'https://github.com/datatug/chinookdb', directory: 'model' }, {
   exclude: modelChecksumsPath,
+  files: listModelFiles(),
   note: 'Paths are relative to /model/. This file lists every other published model file with its SHA-256 and size in bytes.',
 });
 

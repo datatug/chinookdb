@@ -1,0 +1,19 @@
+format: meaning/draft-1
+id: calendar
+name: Calendar and time
+description: Time concepts that keep their meaning across representations.
+license: CC0-1.0
+concepts:
+  - id: date
+    kind: attribute
+    labels:
+      en: Date
+      ru: Дата
+    synonyms:
+      en: [day, calendar date]
+      ru: [день, календарная дата]
+    description: >-
+      A calendar day: year, month and day, without a time of day. A dataset
+      that stores a timestamp whose time is always midnight can treat it as a
+      date. Questions that ask "when", "which year" or "which month" group by
+      a date.

@@ -10,7 +10,8 @@ hand-maintained.
 
 The data model and meaning page (`/model/`) reads `model/chinook.modelspec.json`
 and `model/chinook.meaning.yaml`; `src/pages/model/[...file].ts` publishes
-every file under `model/` byte for byte at `/model/<path>`.
+every git-tracked file under `model/` (no dotfiles) byte for byte at
+`/model/<path>`.
 
 ## Delivery
 

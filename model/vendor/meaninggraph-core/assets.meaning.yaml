@@ -1,0 +1,54 @@
+format: meaning/draft-1
+id: assets
+name: Assets and finance
+description: >-
+  Value and money expressed as reusable concepts: currencies and amounts of
+  money.
+license: CC0-1.0
+concepts:
+  - id: currency
+    kind: entity
+    labels:
+      en: Currency
+      ru: Валюта
+    synonyms:
+      en: [currency code]
+      ru: [код валюты]
+    description: >-
+      A unit of money used to express value, with an ISO 4217 code. Values are
+      keyed by the lowercase alphabetic code. Starter subset: three
+      currencies.
+    values:
+      - id: usd
+        labels: {en: US dollar, ru: Доллар США}
+        aliases:
+          en: [USD, dollar, dollars, $]
+          ru: [доллар, доллары]
+        codes: {alpha: USD, numeric: "840"}
+      - id: eur
+        labels: {en: Euro, ru: Евро}
+        aliases:
+          en: [EUR, euros, €]
+        codes: {alpha: EUR, numeric: "978"}
+      - id: gbp
+        labels: {en: Pound sterling, ru: Фунт стерлингов}
+        aliases:
+          en: [GBP, pound, pounds, £]
+          ru: [фунт, фунты]
+        codes: {alpha: GBP, numeric: "826"}
+
+  - id: money-amount
+    kind: attribute
+    units-of: currency
+    labels:
+      en: Money amount
+      ru: Денежная сумма
+    synonyms:
+      en: [amount, amount of money, sum of money]
+      ru: [сумма денег]
+    description: >-
+      An amount of money. It is only meaningful together with its currency:
+      its unit is one of the values of currency, so a concept that extends it
+      states the currency as that value (unit: USD), and the check resolves
+      the unit to exactly one currency. A dataset that does not store the
+      currency must still say which one applies.

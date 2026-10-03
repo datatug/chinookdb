@@ -2,48 +2,9 @@ format: meaning/draft-1
 id: commerce
 name: Commerce
 description: >-
-  Buying and selling: customers, invoices, money amounts and revenue.
+  Buying and selling: customers, invoices, prices and revenue.
+license: CC0-1.0
 concepts:
-  - id: currency
-    kind: entity
-    labels:
-      en: Currency
-      ru: Валюта
-    synonyms:
-      en: [money, currency code]
-    description: >-
-      A currency with an ISO 4217 code. Values are keyed by the lowercase
-      alphabetic code. Starter content: three currencies.
-    values:
-      - id: usd
-        labels: {en: US dollar, ru: Доллар США}
-        aliases:
-          en: [USD, dollar, dollars, $]
-          ru: [доллар, доллары]
-        codes: {alpha: USD, numeric: "840"}
-      - id: eur
-        labels: {en: Euro, ru: Евро}
-        aliases:
-          en: [EUR, euros, €]
-        codes: {alpha: EUR, numeric: "978"}
-      - id: gbp
-        labels: {en: Pound sterling, ru: Фунт стерлингов}
-        aliases:
-          en: [GBP, pound, pounds, £]
-          ru: [фунт, фунты]
-        codes: {alpha: GBP, numeric: "826"}
-
-  - id: money-amount
-    kind: attribute
-    labels:
-      en: Money amount
-      ru: Сумма
-    synonyms:
-      en: [amount, price, cost, value]
-    description: >-
-      An amount of money. It is only meaningful together with its currency;
-      a dataset that does not store the currency must say which one applies.
-
   - id: customer
     kind: entity
     labels:
@@ -52,7 +13,7 @@ concepts:
     synonyms:
       en: [buyer, client, purchaser, shopper]
       ru: [покупатель, заказчик]
-    description: A person or organisation that buys goods or services.
+    description: A person or organization that purchases goods or services.
 
   - id: invoice
     kind: entity
@@ -60,11 +21,13 @@ concepts:
       en: Invoice
       ru: Счёт
     synonyms:
-      en: [bill, sale, order, purchase, receipt]
-      ru: [счёт-фактура, покупка, заказ]
+      en: [bill, invoices]
+      ru: [счёт-фактура, счета]
     description: >-
-      A document that records one sale to a customer: what was sold, when,
-      where it was billed, and the amount charged.
+      A request for payment for goods or services supplied to a customer: what
+      was supplied, when, where it is billed, and the amount charged. Not an
+      order (a request to supply) and not a receipt (proof of payment). A
+      dataset whose invoices are purchases says so with its own synonyms.
 
   - id: invoice-line
     kind: entity
@@ -73,7 +36,7 @@ concepts:
       en: Invoice line
       ru: Строка счёта
     synonyms:
-      en: [line item, order line, item sold]
+      en: [line item, invoice item]
       ru: [позиция счёта]
     description: One item on an invoice, with its unit price and quantity.
 
@@ -89,17 +52,31 @@ concepts:
       ru: [итого]
     description: The amount charged on an invoice, normally the sum of its lines.
 
+  - id: price
+    kind: attribute
+    extends: money-amount
+    labels:
+      en: Price
+      ru: Цена
+    synonyms:
+      en: [cost, how much]
+      ru: [стоимость]
+    description: >-
+      The amount asked for one unit of a product or service, such as the list
+      price in a catalogue. The amount actually charged on a sale is a
+      unit-price.
+
   - id: unit-price
     kind: attribute
     of: invoice-line
-    extends: money-amount
+    extends: price
     labels:
       en: Unit price
       ru: Цена за единицу
     synonyms:
-      en: [price, price each, item price]
-      ru: [цена]
-    description: The price of one unit of an item.
+      en: [price each, item price]
+      ru: [цена за штуку]
+    description: The price charged for one unit of an item on an invoice line.
 
   - id: quantity
     kind: attribute
@@ -114,6 +91,7 @@ concepts:
 
   - id: revenue
     kind: measure
+    units-of: currency
     labels:
       en: Revenue
       ru: Выручка
@@ -122,8 +100,8 @@ concepts:
       ru: [продажи, объём продаж, оборот, траты, покупки]
     description: >-
       The money received from sales over a period, before costs. From the
-      buyer's side the same number is spend: "which countries buy the most"
-      asks for revenue grouped by the buyer's country.
+      buyer's side the same number is spend, so a question about who buys or
+      spends the most asks for revenue grouped by the buyer.
     measure:
       formula: The sum of the invoice totals of the sales in scope.
       aggregation: sum

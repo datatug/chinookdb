@@ -1,21 +1,32 @@
-# Universal concepts (temporary copy)
+# MeaningGraph core concepts
 
-These files are a temporary copy of the universal concepts that
-`model/chinook.meaning.yaml` reuses: country, currency, money amount, customer,
-invoice, invoice line, revenue, person, employee, population and per capita.
+Concepts that are not specific to any dataset, in the meaning-file format
+`meaning/draft-1` (JSON Schema: `meaning.schema.json` in this directory). A
+dataset's meaning file reuses them by address, for example
+`meaning://github.com/meaninggraph/core/country`, and binds its own columns to
+them.
 
-They are planned to live in their own public repository,
-`github.com/meaninggraph/core`, which does not exist yet. The meaning file
-already refers to them by that address (`meaning://github.com/meaninggraph/core/<concept>`),
-and `pnpm test:model` resolves those references against this directory.
+| File | Concepts |
+|---|---|
+| `geo.meaning.yaml` | country (a starter subset with ISO 3166-1 codes, English and Russian names, aliases such as "USA"), country-code, city, population |
+| `assets.meaning.yaml` | currency (USD, EUR, GBP), money-amount |
+| `commerce.meaning.yaml` | customer, invoice, invoice-line, invoice-total, price, unit-price, quantity, revenue |
+| `identity.meaning.yaml` | person, organization, employee, manager |
+| `calendar.meaning.yaml` | date |
+| `statistics.meaning.yaml` | per-capita (a pattern for ratios) |
 
-When the public repository exists:
+Concept ids are unique across the whole directory: the file a concept sits in
+is packaging, not part of its address. A concept's meaning never changes under
+the same id; a different meaning gets a new id, and old concepts are
+deprecated, not deleted, so pinned references keep resolving.
 
-1. pin the references in `model/chinook.meaning.yaml` with `?ref=<commit>`;
-2. change the one `meaningSources` entry in `scripts/lib/meaning.mjs` from
-   this directory to the repository (the replacement line is in the comment
-   above it);
-3. delete this directory and run `pnpm generate`.
+Draft: the format may change before `meaning/1`, and the value lists are
+starter subsets, not the full ISO lists.
 
-Do not edit these files here; changes belong in the universal repository.
-They have no licence of their own yet (see the repository README).
+## Licence
+
+Everything in this directory, the schema included, is dedicated to the public
+domain under [CC0-1.0](LICENSE): copy it, vendor it and change it without
+attribution. ISO codes are facts; names and descriptions are original. A
+vendored copy of this directory keeps this README and the `LICENSE` file
+byte for byte.

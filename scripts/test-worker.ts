@@ -46,7 +46,8 @@ for (const [path, type] of [
   ['/model/chinook.modelspec.hcl', 'text/plain; charset=utf-8'],
   ['/model/chinook.modelspec.json', 'application/json; charset=utf-8'],
   ['/model/chinook.meaning.yaml', 'application/yaml; charset=utf-8'],
-  ['/model/meaning.schema.json', 'application/json; charset=utf-8'],
+  ['/model/vendor/meaninggraph-core/meaning.schema.json', 'application/json; charset=utf-8'],
+  ['/model/vendor/README.md', 'text/markdown; charset=utf-8'],
   ['/model/checksums.json', 'application/json; charset=utf-8'],
   ['/model/vendor/meaninggraph-core/geo.meaning.yaml', 'application/yaml; charset=utf-8'],
 ] as const) {
