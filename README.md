@@ -92,9 +92,11 @@ repository [`meaninggraph/core`](https://github.com/meaninggraph/core), and
 nothing from it is copied into this one. A concept is referred to as
 `meaning://github.com/meaninggraph/core/<concept>?ref=<commit>`, and every
 reference carries the same full 40-character commit id (the check fails on a
-mix, and on a branch or tag in place of a commit). To move to a newer version,
-change that id in every reference of `model/chinook.meaning.yaml` and run
-`pnpm test:model`.
+mix, and on a branch or tag in place of a commit). The pinned commit is
+`cb97dbcd9e951b00e7d46cb2e0c4e120c24c8db7` (the check fails if this paragraph
+names another). To move to a newer version, change that id in every reference
+of `model/chinook.meaning.yaml` and in this paragraph, run `pnpm generate` (it
+rewrites `model/checksums.json`) and run `pnpm test:model`.
 
 `pnpm test:model` fetches that one commit (a shallow `git fetch` of the pinned
 id into `.cache/meaning-sources/<commit>`, retried on network errors, git-ignored)
