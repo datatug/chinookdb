@@ -196,7 +196,11 @@ ignored file is refused, because the Directory reads the published commit.
   that lists the canonical URL), and `recordset_page`, a URL template with
   `{name}` where a recordset's name goes, so clients never build the route
   themselves;
-- the ModelSpec files, the meaning file, and the MeaningGraph address
+- the ModelSpec model, named by local files (`model.modelspec`, the JSON, and
+  `model.hcl`, the source; both are required together) and by the address
+  `model.address`, `modelspec://github.com/datatug/chinookdb/chinook`, the
+  model's address in the ModelSpec registry (see "The model address" below);
+- the meaning file, and the MeaningGraph address
   `meaning://github.com/datatug/chinookdb`, which must match the repository and
   the meaning file's own `id`;
 - the publisher (DataTug) and the licences: `data` (MIT, the upstream Chinook
@@ -210,10 +214,56 @@ do comes from its own discovery document. The check refuses unknown keys, URLs
 that are not https, URLs with credentials, a query string or a fragment, and
 URLs that name an IP address or a local host.
 
-`pnpm test:model` fails when `OVDB.md` does not parse, when a file named in
-`OVDB.md` or `ovdb.yaml` is missing or is not a tracked regular file, or when
-the recordsets are not exactly the ModelSpec entities. It reads git's HEAD, so
-a new file must be committed before the check can see it.
+The manifest check fails when `OVDB.md` does not parse, when a file named in
+`OVDB.md` or `ovdb.yaml` is missing or is not a tracked regular file, when
+`model.hcl` is absent from a manifest that names local model files (or is not a
+`.modelspec.hcl` file, or is not the path in the meaning file's `models:`
+entry, which is where the Directory takes the model's path from), when a licence
+is not one of the known SPDX ids the checker lists, when `recordset_page` has a
+placeholder other than `{name}`, or when the recordsets are not exactly the
+ModelSpec entities.
+
+What `pnpm test:model` reads, and from where:
+
+- The check of this repository reads git's HEAD only. It asks git what HEAD
+  holds (`git ls-tree`) and reads each file from HEAD (`git cat-file blob
+  HEAD:<path>`). A path such as `:/x` is taken literally, never as git's path
+  syntax. So an edit that is not committed, and a new file that is not
+  committed yet, are not seen by that check.
+- The tests that make the check fail on purpose copy `OVDB.md`, `ovdb.yaml`
+  and the model and meaning files from the working tree into a scratch
+  repository, commit them there and check that copy first. So an uncommitted
+  edit to one of those files can still fail the tests, even though the check of
+  this repository ignores it.
+- The other tests in the file (generated files, checksums, the meaning checks)
+  read the working tree.
+
+### The model address
+
+A manifest names its model one of two ways. By **local files**
+(`model.modelspec` and `model.hcl`), as here. Or by `model.address`, pinned
+with `?ref=<40 hex>`, when the model lives in another repository: a different
+hoster's repository would point at the shared Chinook model instead of copying
+it, and have no model files of its own. `model.address` is
+`modelspec://github.com/<org>/<repository>/<module>`, optionally followed by
+`?ref=<40 hex>`, and nothing else.
+
+The address-only form is the intended way for another hoster to reuse a
+published model, but it is not usable yet: the OVDB Directory still needs local
+model files and does not read `model.address`, and a manifest must still carry
+its own meaning file. Today the checker only accepts the form.
+
+This repository carries both: the local files, plus the address of the model
+in the ModelSpec registry (`github.com/modelspec-org/registry`; its
+registration of `chinook` is in review there). Because the model is in this
+same repository the address carries no `?ref=`, and the checker requires it to
+be this repository plus the module name the model file declares. Without local
+files the checker requires `?ref=`.
+
+The registry address is the repository plus the module name:
+`modelspec://github.com/datatug/chinookdb/chinook`. The model's own
+`module.id` is different, `github.com/datatug/chinookdb/model/chinook`, because
+it includes the `model/` directory the files are in. They name the same model.
 
 ## DataTug Embed and DTQL
 

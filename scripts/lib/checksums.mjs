@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { cleanGitEnv } from './git-env.mjs';
 
 // The checksums file describes every published data file except itself.
 export const checksumsPath = 'metadata/checksums.json';
@@ -32,7 +33,7 @@ export async function listDataFiles(dir, prefix = '', exclude = checksumsPath) {
 // by code point. Only committed or staged files are published, so a stray
 // local file never reaches the site. Fails loudly outside a git checkout.
 export function listTrackedFiles(root, dir) {
-  const output = execFileSync('git', ['-C', root, 'ls-files', '-z', '--', dir], { encoding: 'utf8' });
+  const output = execFileSync('git', ['-C', root, 'ls-files', '-z', '--', dir], { encoding: 'utf8', env: cleanGitEnv() });
   return output.split('\0').filter(Boolean).map((path) => path.slice(dir.length + 1)).filter((path) => !isDotPath(path)).sort(byCodePoint);
 }
 
