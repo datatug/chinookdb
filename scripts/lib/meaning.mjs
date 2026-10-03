@@ -10,8 +10,9 @@
 // to the entity of its target concept); and values must cover the data they
 // describe.
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { cleanGitEnv } from './git-env.mjs';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import Ajv2020 from 'ajv/dist/2020.js';
@@ -108,59 +109,142 @@ const commit = /^[0-9a-f]{40}$/;
 // Errors that another attempt cannot fix (the ref or repository is not there).
 const permanentFailure = /couldn't find remote ref|not our ref|invalid refspec|not found|does not appear to be a git repository|could not read from remote|authentication failed/i;
 const gitFailure = (error) => String(error.stderr ?? error.message).trim().split('\n').filter(Boolean).pop() ?? 'git failed';
-const defaultRun = (command, args) => execFileSync(command, args, { stdio: 'pipe', env: { ...cleanGitEnv(), GIT_TERMINAL_PROMPT: '0' } }).toString();
+// GIT_NO_REPLACE_OBJECTS: a replace ref in a repository must never make one commit read as another. The
+// matching -c flags are in `hardening`, which goes in front of every git call here, so that they also hold for
+// a `run` that is not this one.
+const defaultRun = (command, args) => execFileSync(command, args, { stdio: 'pipe', env: { ...cleanGitEnv(), GIT_TERMINAL_PROMPT: '0', GIT_NO_REPLACE_OBJECTS: '1' } }).toString();
 const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+// What no git call here may be told by the repository it reads: no hook (core.hooksPath), no filesystem
+// monitor command (core.fsmonitor: git status would run it), no replace ref (core.useReplaceRefs).
+export const hardening = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.useReplaceRefs=false'];
+const lstatOrNull = (path) => { try { return lstatSync(path); } catch (error) { if (error.code === 'ENOENT') return null; throw error; } };
 
 // Fetches `ref` of the git repository at `url` and returns { dir, release }.
-// A full commit id is immutable, so with a `cacheDir` the checkout is kept
-// there under that id (a CI cache may restore it) and reused only after it has
-// been made that commit again: tracked files are rewritten from the commit,
-// every untracked or ignored file is removed (whatever the exclude rules say),
-// and a checkout that still differs (hidden index flags such as
-// assume-unchanged or skip-worktree, a sparse checkout) is thrown away and
-// fetched anew; `release` then does nothing. Any other ref, or no cacheDir,
-// uses a temporary clone that `release` removes (in `tempDir`). A failed fetch
-// is retried (`retries` attempts, a growing pause between them) and never
-// leaves a clone behind. Two processes filling the same cache entry both end
-// up with the same verified directory. `run(command, args)` runs git; tests
-// replace it.
-export function checkoutGit(url, ref, { cacheDir, tempDir = tmpdir(), run = defaultRun, retries = 3, retryDelayMs = 1000 } = {}) {
-  const git = (dir, ...args) => run('git', ['-C', dir, ...args]);
-  // Makes `dir` exactly the commit `expected` again; false when it cannot be
-  // trusted. git is pointed at dir/.git explicitly, so that a directory that is
-  // not a repository of its own (inside the cache, inside the project's own
-  // repository) is never reset or cleaned by mistake.
+//
+// A full commit id is immutable, so with a `cacheDir` the checkout is kept there under that id (a CI cache may
+// restore it). An entry is reused only when it is exactly that commit: HEAD is the commit, no tracked file
+// differs, there is no untracked or ignored file or directory (whatever the exclude rules say), and no hidden index
+// flag (assume-unchanged, skip-worktree, a sparse checkout). A sound entry is only read. An entry that is not is
+// repaired in place (tracked files rewritten from the commit, everything untracked removed) and looked at again;
+// one that cannot be repaired is thrown away and fetched anew. An entry or a `.git` that is a symbolic link is
+// never followed: the link itself is replaced, and what it pointed at is not touched. `release` then does nothing.
+// Any other ref, or no cacheDir, uses a temporary clone that `release` removes (in `tempDir`). A failed fetch is
+// retried (`retries` attempts, a growing pause between them) and never leaves a clone behind.
+//
+// Several processes may fill and read one cache entry at the same time (the suite runs in parallel on a
+// developer's machine, and CI shards share a cache). A checkout is always made in a private directory and renamed
+// into place, which is atomic: the loser of the rename uses the winner's directory once it is verified. A git
+// failure while verifying (another process holds the index lock) is looked at again before an entry is
+// condemned. An entry is removed only when this process examined it and condemned it: it is renamed aside, and if
+// what was moved is not the directory that was examined (another process replaced the entry in between) it is put
+// back untouched and looked at afresh. Parked entries (`.discard-<pid>-<time>-*`) whose process is gone or that are
+// older than `discardStaleMs` are removed on entry, never a young one of a live process, and so is a `.meaning-source-*`
+// work directory older than `staleMs`. Every git call is hardened (see `hardening`, --template=
+// on init, --end-of-options before a url, ref or path). `run(command, args)` runs git; tests replace it, and
+// Known gap (datatug/chinookdb#16): git still runs in the entry, so a filter driver in the entry's own configuration runs.
+// `onCondemned(dir)` is called between the verdict and the removal, and `onParked(aside)` between parking and the identity
+// comparison, where a test makes another process act.
+export function checkoutGit(url, ref, { cacheDir, tempDir = tmpdir(), run = defaultRun, retries = 3, retryDelayMs = 1000, staleMs = 60 * 60 * 1000, discardStaleMs = 10 * 60 * 1000, onCondemned, onParked } = {}) {
+  const git = (dir, ...args) => run('git', [...hardening, '-C', dir, ...args]);
+  // git is pointed at dir/.git explicitly, so that a directory that is not a repository of its own (inside the
+  // cache, inside the project's own repository) is never reset or cleaned by mistake.
+  const own = (dir, ...args) => run('git', [...hardening, '--git-dir', join(dir, '.git'), '--work-tree', dir, ...args]);
+  // Read only: dir is exactly the commit (no change, nothing untracked or ignored, empty directories included, no
+  // hidden index flag).
+  const exact = (dir) => own(dir, '--no-optional-locks', 'status', '--porcelain').trim() === ''
+    && own(dir, '--no-optional-locks', 'clean', '-n', '-d', '-x', '-f', '-f').trim() === ''
+    && own(dir, '--no-optional-locks', 'ls-files', '-v').split('\n').filter(Boolean).every((line) => line.startsWith('H '));
+  // True when `dir` is exactly the commit `expected`, making it so first if that can be done; false when it cannot be trusted.
   const pristine = (dir, expected) => {
     try {
-      if (!statSync(join(dir, '.git')).isDirectory()) return false;
-      const own = (...args) => run('git', ['--git-dir', join(dir, '.git'), '--work-tree', dir, ...args]);
-      if (own('rev-parse', 'HEAD').trim() !== expected) return false;
-      own('read-tree', '--reset', '-u', 'HEAD');
-      own('checkout-index', '--all', '--force');
-      own('clean', '-ffdxq');
-      return own('status', '--porcelain').trim() === ''
-        && own('ls-files', '--others').trim() === ''
-        && own('ls-files', '-v').split('\n').filter(Boolean).every((line) => line.startsWith('H '));
+      if (!lstatSync(dir).isDirectory() || !lstatSync(join(dir, '.git')).isDirectory()) return false; // lstat: a link is not followed
     } catch { return false; }
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        if (own(dir, 'rev-parse', '--verify', 'HEAD').trim() !== expected) return false;
+        if (exact(dir)) return true;
+        own(dir, 'read-tree', '--reset', '-u', 'HEAD');
+        own(dir, 'checkout-index', '--all', '--force');
+        own(dir, 'clean', '-ffdxq');
+        if (exact(dir)) return true;
+      } catch { /* git failed, most likely on another process's lock: look again */ }
+      if (attempt < 3) pause(100 * attempt);
+    }
+    return false;
+  };
+  // Removes the entry this process examined (`examined`: its lstat) and condemned. 'discarded', 'gone' (nothing there any
+  // more), or 'replaced' (another process put a different entry there first, which was put back and not touched). The entry
+  // is parked as `.discard-<pid>-<time>-<uuid>`: the sweep (below) leaves a name whose process is alive and that is young,
+  // so that no other process removes what this one is about to put back.
+  const discard = (dir, examined, parent) => {
+    const aside = join(parent, `.discard-${process.pid}-${Date.now()}-${randomUUID()}`);
+    try { renameSync(dir, aside); } catch (error) {
+      if (error.code === 'ENOENT') return 'gone';
+      throw new Error(`cannot move the unusable cache entry ${dir} aside: ${error.message}`);
+    }
+    onParked?.(aside);
+    const moved = lstatOrNull(aside);
+    if (moved === null) return 'gone'; // removed by a sweep (this process crashed and came back, or it took too long): nothing to put back
+    if (moved.dev !== examined.dev || moved.ino !== examined.ino || moved.birthtimeMs !== examined.birthtimeMs) {
+      try { renameSync(aside, dir); } catch (error) {
+        // Another entry was made at `dir` meanwhile; the one moved aside is a duplicate that nobody reads from here. It is
+        // left for the sweep, which removes it when this process is gone or ten minutes have passed.
+        if (!['EEXIST', 'ENOTEMPTY'].includes(error.code)) {
+          throw new Error(`cannot put the cache entry ${dir} back from ${aside}: ${error.code === 'ENOENT' ? 'it was removed by another process in the meantime (the entry another process was using is gone; run again)' : error.message}`);
+        }
+      }
+      return 'replaced';
+    }
+    rmSync(aside, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    return 'discarded';
+  };
+  // Whether a process is alive: signal 0 only checks (EPERM: it exists, and is somebody else's).
+  const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
+  // What a crash left in the cache: parked entries whose process is gone or that are older than `discardStaleMs` (a live
+  // process may be about to put one back), and work directories nobody has touched for `staleMs`. Links are never followed.
+  const sweep = (parent) => {
+    let names;
+    try { names = readdirSync(parent); } catch { return; }
+    for (const name of names) {
+      const path = join(parent, name);
+      const parked = /^\.discard-(\d+)-(\d+)-/.exec(name);
+      const stale = parked
+        ? !alive(Number(parked[1])) || Date.now() - Number(parked[2]) > discardStaleMs
+        : name.startsWith('.discard-') ? Date.now() - (lstatOrNull(path)?.mtimeMs ?? Date.now()) > discardStaleMs // not a name this code makes: by age alone
+          : name.startsWith('.meaning-source-') && Date.now() - (lstatOrNull(path)?.mtimeMs ?? Date.now()) > staleMs;
+      if (stale) rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
   };
   const kept = cacheDir && commit.test(ref) ? join(cacheDir, ref) : null;
-  if (kept && existsSync(kept)) {
-    if (pristine(kept, ref)) return { dir: kept, release() {} };
-    rmSync(kept, { recursive: true, force: true });
+  if (kept) {
+    mkdirSync(cacheDir, { recursive: true });
+    sweep(cacheDir);
+    for (let attempt = 1; ; attempt++) {
+      const found = lstatOrNull(kept);
+      if (!found) break;
+      if (!found.isDirectory()) {
+        unlinkSync(kept); // a link or a file: the link itself goes, never what it points at
+        break;
+      }
+      if (pristine(kept, ref)) return { dir: kept, release() {} };
+      onCondemned?.(kept);
+      if (discard(kept, found, cacheDir) === 'discarded') break;
+      if (attempt >= 5) throw new Error(`the cache entry ${kept} keeps being replaced by other processes`);
+    }
   }
   const parent = kept ? cacheDir : tempDir;
   mkdirSync(parent, { recursive: true });
   const work = mkdtempSync(join(parent, '.meaning-source-'));
   let done = false;
   try {
-    run('git', ['init', '-q', work]);
+    run('git', [...hardening, 'init', '-q', '--template=', '--end-of-options', work]);
     for (let attempt = 1; ; attempt++) {
-      try { git(work, 'fetch', '-q', '--depth', '1', url, ref); break; } catch (error) {
+      try { git(work, 'fetch', '-q', '--depth', '1', '--end-of-options', url, ref); break; } catch (error) {
         if (attempt >= retries || permanentFailure.test(gitFailure(error))) throw new Error(`cannot fetch ${ref} from ${url}: ${gitFailure(error)}`);
         pause(retryDelayMs * attempt);
       }
     }
-    git(work, 'checkout', '-q', 'FETCH_HEAD');
+    git(work, 'checkout', '-q', '--end-of-options', 'FETCH_HEAD');
     if (commit.test(ref) && !pristine(work, ref)) throw new Error(`${url} at ${ref} did not check out that commit`);
     if (kept) {
       try { renameSync(work, kept); } catch (error) {

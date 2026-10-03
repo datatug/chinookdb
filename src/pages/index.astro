@@ -1,6 +1,7 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
 import TableCard from '../components/TableCard.astro';
+import ListedIn from '../components/ListedIn.astro';
 import { tables } from '../data/model';
 
 const totalRows = tables.reduce((sum, table) => sum + table.rowCount, 0);
@@ -24,4 +25,5 @@ const totalRows = tables.reduce((sum, table) => sum + table.rowCount, 0);
   </section>
   <section class="shell section table-section"><div class="section-heading"><div><p class="eyebrow">The schema</p><h2>Eleven tables. One useful shape.</h2></div><a class="text-link" href="/tables/">View all tables <span aria-hidden="true">→</span></a></div><div class="table-grid">{tables.map((table) => <TableCard table={table} />)}</div></section>
   <section class="shell section format-section"><div class="format-panel"><div><p class="eyebrow">Built for your workflow</p><h2>Download once.<br /><em>Use it anywhere.</em></h2><p>SQLite for a local database. JSON, YAML, and CSV for tooling. SQL scripts when you need to load another engine.</p></div><div class="format-list"><a href="/data/chinook.sqlite"><span class="format-label">SQLite</span><span>Complete database <b>↓</b></span></a><a href="/data/chinook.json"><span class="format-label">JSON</span><span>Complete database <b>↓</b></span></a><a href="/data/chinook.yaml"><span class="format-label">YAML</span><span>Complete database <b>↓</b></span></a><a href="/downloads/"><span class="format-label">SQL + CSV</span><span>More formats <b>→</b></span></a></div></div></section>
+  <ListedIn />
 </BaseLayout>

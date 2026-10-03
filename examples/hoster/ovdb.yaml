@@ -1,0 +1,83 @@
+# EXAMPLE: the OpenVaultDB publisher manifest of someone who hosts their own copy of the Chinook sample
+# database. Copy this file and OVDB.md to the root of your own repository and replace every value marked
+# PLACEHOLDER; the rest is what makes the database a Chinook database and stays as it is. It must not be
+# listed in the Directory as it stands: the organisation `example_org` has an underscore, which no GitHub
+# account can have, and every host is on example.com, so the placeholders cannot be someone's real ones.
+#
+# This is the "shared" form of the manifest: there are no model files and no meaning file in your repository.
+# The model and the meaning graph are published in github.com/datatug/chinookdb, and are named by address,
+# each pinned with ?ref=<40 hex> to the commit that is read. Every hoster of Chinook points at the same two
+# addresses, so every one of them is a database of the same model.
+#
+# Offline check:   node scripts/check-ovdb-manifest.mjs --repository https://github.com/example_org/chinook-hosting <directory>
+# (it checks the shape only; the Directory checks the addresses against the ModelSpec and MeaningGraph registries.)
+format: ovdb-manifest/draft-1
+
+# PLACEHOLDER: your id. Lower-case letters, digits and single hyphens; it names your Directory record.
+id: chinook-example
+# PLACEHOLDER: what the Directory shows.
+title: Chinook at Example Co
+description: >-
+  The Chinook sample database, hosted by Example Co.
+
+# PLACEHOLDER: optional. Your own page for the database, published in the Directory's index. An https URL of at most 200 characters, lower-case host, plain path (A-Z a-z 0-9 . _ ~ / -), no port.
+homepage: https://example.com/chinook/
+
+# PLACEHOLDER: the canonical identity of your database, a public https URL with `ovdb` as a path segment or
+# as a subdomain. It stays the same if the deployment moves.
+url: https://ovdb.example.com/dbs/chinook
+
+deployment:
+  # PLACEHOLDER: where your database is live.
+  url: https://cloud.example.com/ovdb/dbs/chinook
+  # PLACEHOLDER: the engine your deployment runs.
+  engine: postgres
+  # PLACEHOLDER: the discovery document on the origin of the canonical url above, always at this path.
+  discovery: https://ovdb.example.com/.well-known/openvaultdb
+  # PLACEHOLDER: where a recordset's page is; {name} stands for the recordset's name.
+  recordset_page: https://cloud.example.com/ovdb/dbs/chinook/collections/{name}
+
+# The shared model, pinned. 8c9e62e is the commit of datatug/chinookdb that the ModelSpec registry, the
+# MeaningGraph registry and the Directory all pin today. No local model files, so no model.modelspec or
+# model.hcl; the registry says where the model's files are.
+model:
+  address: modelspec://github.com/datatug/chinookdb/chinook?ref=8c9e62ed6641c0a00faa3867167d928af4c44b06
+
+meaning:
+  # The shared meaning graph, pinned the same way.
+  address: meaning://github.com/datatug/chinookdb?ref=8c9e62ed6641c0a00faa3867167d928af4c44b06
+  # A path in the graph's repository (datatug/chinookdb), not in yours: the meaning file that binds the model.
+  file: model/chinook.meaning.yaml
+  graph:
+    # The MeaningGraph registry's id for that graph.
+    id: chinook
+
+# PLACEHOLDER: you, the publisher. The repository is the one that carries this file, on github.com. (An
+# organisation name with an underscore is not a name GitHub can issue: replace it with yours.)
+publisher:
+  name: Example Co
+  url: https://github.com/example_org
+  repository: https://github.com/example_org/chinook-hosting
+
+# licences.data is the licence of the data you serve, and the one the Directory shows for your database. The
+# upstream Chinook data (Copyright (c) 2008-2024 Luis Rocha) is MIT; change it only if your copy is different.
+# licences.model and licences.meaning are left out: the registries say what the model and the meaning are
+# licensed under (if you write them, they must agree).
+licences:
+  data: MIT
+
+# Exactly the entities of the Chinook model, which are also the collection names your deployment serves.
+# To serve a subset, list it and add `recordsets_partial: true` (a subset must also list every entity that a
+# listed entity references).
+recordsets:
+  - Album
+  - Artist
+  - Customer
+  - Employee
+  - Genre
+  - Invoice
+  - InvoiceLine
+  - MediaType
+  - Playlist
+  - PlaylistTrack
+  - Track

@@ -9,6 +9,9 @@ description: >-
   tracks, playlists, customers, employees and invoices. Read-only, served from
   a pinned copy of the upstream SQLite fixture.
 
+# The publisher's own page for the database: the Directory publishes it in its index, and its site may show it as "Website".
+homepage: https://chinookdb.com/
+
 # The canonical identity of the database. It stays the same if the deployment moves.
 url: https://chinookdb.com/ovdb/dbs/chinook
 
@@ -20,11 +23,11 @@ deployment:
   # Where a recordset's page is. Clients use this template and never build the route themselves.
   recordset_page: https://cloud.openvaultdb.com/ovdb/dbs/chinook/collections/{name}
 
-# The model is named by local files (below) or, when it lives in another repository, by `address`
-# with a pinned ?ref=<40 hex> (that form is not read by the Directory yet). This repository has both:
-# its files, and the model's address in the ModelSpec registry (github.com/modelspec-org/registry;
-# its registration of `chinook` is in review there). The address is repository + module name; it has
-# no ref because the files are in this same repository.
+# The model is named by local files (below), as here, or, when it lives in another repository, by `address`
+# pinned with ?ref=<40 hex> and no local files (the shared form, see examples/hoster/); the Directory accepts
+# both. This repository has its files, and also the model's address in the ModelSpec registry
+# (github.com/modelspec-org/registry, where `chinook` is registered), which the Directory copies into its
+# index. The address is repository + module name; it has no ref because the files are in this same repository.
 model:
   address: modelspec://github.com/datatug/chinookdb/chinook
   modelspec: model/chinook.modelspec.json
