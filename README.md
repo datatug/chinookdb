@@ -191,9 +191,10 @@ ignored file is refused, because the Directory reads the published commit.
 
 - the canonical identity, `https://chinookdb.com/ovdb/dbs/chinook`, which stays
   the same if the database moves, and the optional `homepage`,
-  `https://chinookdb.com/`, this site, which the OVDB Directory shows as Website
-  on the database's page (either form of manifest may have it: a public https
-  URL, not necessarily on the canonical URL's origin);
+  `https://chinookdb.com/`, this site, which the Directory publishes in its index
+  and which its site may show as "Website" (either form of manifest may have it:
+  an https URL of at most 200 characters, not necessarily on the canonical URL's
+  origin);
 - the deployment: the live URL at `cloud.openvaultdb.com`, the engine
   (`sqlite`), the discovery document on the canonical URL's own site (the one
   that lists the canonical URL), and `recordset_page`, a URL template with
@@ -288,32 +289,38 @@ as if it were the root, and the output says that the Directory reads `OVDB.md`
 at the root.
 
 It checks, with the Directory's own rules (`scripts/lib/directory-rules.mjs`
-mirrors `openvaultdb/directory` at commit `a4aebb7`, the head of its pull
-request 8, plus two refusals that branch is adding: any port, and any percent
-escape in a path):
+mirrors `scripts/lib/urls.mjs` and `scripts/lib/directory.mjs` of
+`openvaultdb/directory`, including its refusal of any port and of any percent
+escape in a path and its `homepage` rule; the list of single-field edits in
+`scripts/test-model.mjs` pins the agreement):
 
 - every URL field (`url`, `deployment.url`, `deployment.discovery`,
-  `deployment.recordset_page`, `publisher.url`): public https, written exactly as
-  the URL parser would write it (no trailing dot, no upper-case or non-ASCII
-  host, no empty or dot segment, no whitespace or backslash, no userinfo), no
-  port, no percent escape in the path, no IP address, no local, internal or
-  reserved name (`.local`, `.internal`, `.svc`, `.test`, `.example`, `.onion`,
-  `home.arpa`, ...); the canonical `url` also without a trailing slash and with
-  `ovdb` as a path segment or a subdomain; `{name}` once, in the path only;
+  `deployment.recordset_page`, `publisher.url`, `homepage`): public https,
+  written exactly as the URL parser would write it (no trailing dot, no
+  upper-case or non-ASCII host, no empty or dot segment, no whitespace or
+  backslash, no userinfo), no port, no percent escape in the path, no IP address,
+  no local, internal or reserved name (`.local`, `.internal`, `.svc`, `.test`,
+  `.example`, `.onion`, `home.arpa`, ...); the canonical `url` also without a
+  trailing slash and with `ovdb` as a path segment or a subdomain; `{name}` once,
+  in the path only;
 - the `id` (lower-case letters, digits and single hyphens, 80 characters at most)
   and `deployment.engine` (`[A-Za-z][A-Za-z0-9_.+-]{0,39}`);
 - every file path (`[A-Za-z0-9_.-/]` only, no `..`, `.` or empty segment, no glob),
   that each named file is tracked at `HEAD`, and the address and pin shapes;
 - for an own model, the model JSON and the meaning file against the manifest
-  (recordsets, `models:` entry, graph id, licence, module name);
+  (recordsets, graph id and its spelling, licence, module name, and the `models:`
+  entry for the module: spelled as a repository path before it is joined to the
+  meaning file's directory, and equal to `model.hcl`);
 - the keys: an unknown key is refused.
 
-`homepage` is stricter than the Directory's URL rule, and this is what it
-guarantees: at most 200 characters; `https://` and a host of lower-case ASCII
-letters, digits and hyphens in dot-separated labels (at least two, no leading or
-trailing hyphen in a label, no trailing dot), no port and no userinfo; a path of
-only `A-Z a-z 0-9 . _ ~ / -`, with no percent escape, no `//` and no `.` or `..`
-segment. So it is plain text that needs no escaping in an HTML attribute.
+On top of that, **every URL field has one plain spelling**, and this is what a
+page that shows it can rely on: a host of lower-case ASCII letters, digits and
+hyphens in dot-separated labels (1 to 63 characters each, none starting or ending
+with a hyphen, at least two, 253 in all, no trailing dot), no port and no
+userinfo, and a path of only `A-Z a-z 0-9 . _ ~ / -` (plus the literal `{name}`
+of `recordset_page`), with no percent escape, no `//` and no `.` or `..` segment.
+So a URL is plain text that needs no escaping in an HTML attribute, a JSON string
+or a command line. Only `homepage` is also capped, at 200 characters.
 
 It does not check, and the Directory does:
 
@@ -329,7 +336,7 @@ It does not check, and the Directory does:
 - checks across records: the canonical `url`, the deployment and the recordset
   page that two databases claim.
 
-It is stricter than the Directory in a few places: the licence ids it accepts
+It is at least as strict as the Directory in every place it checks, and stricter in a few: the plain URL spelling above, the licence ids it accepts
 are the short list in the checker, not any SPDX-shaped id; `meaning.graph.id`,
 `model.name` and the recordset names are checked for shape here and against the
 registries there; and a module name starts with a letter here, where the

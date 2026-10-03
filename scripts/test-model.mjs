@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { canonicalUrlProblem, enginePattern, homepageProblem, idPattern, maxIdLength, publicHttpsProblem } from './lib/directory-rules.mjs';
+import { canonicalUrlProblem, enginePattern, homepageFieldProblem, idPattern, maxIdLength, publicHttpsProblem } from './lib/directory-rules.mjs';
 import { cleanGitEnv, isolatedGitEnv } from './lib/git-env.mjs';
 import { appendFileSync, chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -618,20 +618,100 @@ test('an entry is removed only when this process examined it and condemned it', 
   assert.ok(existsSync(kept), 'and the entry stays where it was');
 });
 
-test('leftovers of a crash are swept from the cache: discarded entries, and work directories nobody has touched for an hour', () => {
+test('leftovers of a crash are swept from the cache: parked entries of a dead process or older than ten minutes, and work directories nobody has touched for an hour', () => {
   const { url, sha } = localOrigin({ 'a.meaning.yaml': 'format: meaning/draft-1\n' });
   const cacheDir = join(scratch, `cache-${scratchCount++}`);
   checkoutGit(url, sha, { cacheDir, run: plainRun });
-  for (const name of ['.discard-1-x', '.meaning-source-old', '.meaning-source-fresh']) {
+  // A process that has exited: its pid is not alive (spawnSync waits for it).
+  const deadPid = Number(spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }).stdout);
+  assert.throws(() => process.kill(deadPid, 0), /ESRCH/, 'control: the pid is dead');
+  const now = Date.now();
+  const parked = {
+    [`.discard-${deadPid}-${now}-dead`]: 'swept: its process is gone',
+    [`.discard-${process.pid}-${now - 11 * 60 * 1000}-old`]: 'swept: older than ten minutes',
+    [`.discard-${process.pid}-${now}-mine`]: 'kept: a live process may be about to put it back',
+    [`.discard-${process.ppid}-${now - 5 * 60 * 1000}-parent`]: 'kept: another live process, young',
+  };
+  for (const name of [...Object.keys(parked), '.discard-1-x', '.meaning-source-old', '.meaning-source-fresh']) {
     mkdirSync(join(cacheDir, name));
     writeFileSync(join(cacheDir, name, 'file'), 'x');
   }
-  const longAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+  const longAgo = new Date(now - 2 * 60 * 60 * 1000);
   utimesSync(join(cacheDir, '.meaning-source-old'), longAgo, longAgo);
   assert.equal(checkoutGit(url, sha, { cacheDir, run: plainRun }).dir, join(cacheDir, sha));
-  assert.deepEqual(readdirSync(cacheDir).sort(), ['.meaning-source-fresh', sha].sort(), 'a work directory that may be in use stays');
-  assert.equal(checkoutGit(url, sha, { cacheDir, run: plainRun, staleMs: -1 }).dir, join(cacheDir, sha));
+  assert.deepEqual(readdirSync(cacheDir).sort(), [`.discard-${process.pid}-${now}-mine`, `.discard-${process.ppid}-${now - 5 * 60 * 1000}-parent`, '.discard-1-x', '.meaning-source-fresh', sha].sort(), 'a parked entry of a live process stays while it is young; so does a work directory that may be in use');
+  // A name this code does not make is judged by its age alone.
+  utimesSync(join(cacheDir, '.discard-1-x'), longAgo, longAgo);
+  assert.equal(checkoutGit(url, sha, { cacheDir, run: plainRun, staleMs: -1, discardStaleMs: 60 * 1000 }).dir, join(cacheDir, sha));
+  assert.deepEqual(readdirSync(cacheDir).sort(), [`.discard-${process.pid}-${now}-mine`, sha].sort(), 'with a limit of a minute the five-minute-old one goes, the fresh one stays');
+  assert.equal(checkoutGit(url, sha, { cacheDir, run: plainRun, discardStaleMs: -1 }).dir, join(cacheDir, sha));
   assert.deepEqual(readdirSync(cacheDir), [sha]);
+});
+
+test('a sweep by another process never removes the entry this one has parked and is about to put back', () => {
+  const { url, sha } = localOrigin({ 'a.meaning.yaml': 'format: meaning/draft-1\n' });
+  const cacheDir = join(scratch, `cache-${scratchCount++}`);
+  const kept = join(cacheDir, sha);
+  checkoutGit(url, sha, { cacheDir, run: plainRun });
+  writeFileSync(join(kept, '.git', 'HEAD'), 'ref: refs/heads/nowhere\n');
+  // Process 1 condemns the entry; process 2 replaces it with a good one and reads it; process 1 parks that good entry (it is not the one
+  // it examined); process 3 enters checkoutGit, which sweeps, between the parking and the comparison.
+  const onCondemned = () => {
+    renameSync(kept, join(scratch, `broken-${scratchCount++}`));
+    exec('git', ['clone', '-q', url, kept], { stdio: 'pipe' });
+    writeFileSync(join(kept, '.git', 'marker'), 'the good entry process 2 is reading');
+  };
+  let parkedAs;
+  const onParked = (aside) => {
+    parkedAs = aside;
+    assert.ok(existsSync(join(aside, '.git', 'marker')), 'the good entry is parked');
+    // Process 3 (this process, another call: the parked name carries a live pid and is young): it sweeps on entry, and fills the
+    // entry itself, as a process that finds none does.
+    assert.equal(checkoutGit(url, sha, { cacheDir, run: plainRun }).dir, kept);
+    assert.ok(existsSync(join(aside, '.git', 'marker')), 'the sweep of process 3 left the parked entry alone');
+  };
+  assert.equal(checkoutGit(url, sha, { cacheDir, run: plainRun, onCondemned, onParked }).dir, kept);
+  assert.ok(parkedAs);
+  assert.ok(existsSync(join(parkedAs, '.git', 'marker')), 'the good entry is still there: it could not be put back over process 3\'s entry, and it was not swept');
+  assert.equal(readdirSync(cacheDir).filter((name) => name.startsWith('.discard-')).length, 1, 'one duplicate, left for a later sweep');
+
+  // Without the nested call: the good entry is put back, and nothing is left aside.
+  const cache2 = join(scratch, `cache-${scratchCount++}`);
+  const kept2 = join(cache2, sha);
+  checkoutGit(url, sha, { cacheDir: cache2, run: plainRun });
+  writeFileSync(join(kept2, '.git', 'HEAD'), 'ref: refs/heads/nowhere\n');
+  const replace2 = () => {
+    renameSync(kept2, join(scratch, `broken-${scratchCount++}`));
+    exec('git', ['clone', '-q', url, kept2], { stdio: 'pipe' });
+    writeFileSync(join(kept2, '.git', 'marker'), 'the good entry');
+  };
+  const { dir } = checkoutGit(url, sha, { cacheDir: cache2, run: plainRun, onCondemned: replace2 });
+  assert.equal(dir, kept2);
+  assert.equal(readFileSync(join(kept2, '.git', 'marker'), 'utf8'), 'the good entry', 'put back untouched');
+  assert.deepEqual(readdirSync(cache2), [sha]);
+
+  // The parked entry vanishes before the comparison (a sweep that did not wait): "gone", and the entry is fetched anew; no bare ENOENT.
+  const cache3 = join(scratch, `cache-${scratchCount++}`);
+  const kept3 = join(cache3, sha);
+  checkoutGit(url, sha, { cacheDir: cache3, run: plainRun });
+  writeFileSync(join(kept3, '.git', 'HEAD'), 'ref: refs/heads/nowhere\n');
+  const result = checkoutGit(url, sha, { cacheDir: cache3, run: plainRun, onParked: (aside) => rmSync(aside, { recursive: true, force: true }) });
+  assert.equal(result.dir, kept3);
+  assert.equal(readFileSync(join(kept3, 'a.meaning.yaml'), 'utf8'), 'format: meaning/draft-1\n');
+  assert.deepEqual(readdirSync(cache3), [sha]);
+
+  // It vanishes between the comparison and the put-back: a clear message, not a bare ENOENT from lstat or rename.
+  const cache4 = join(scratch, `cache-${scratchCount++}`);
+  const kept4 = join(cache4, sha);
+  checkoutGit(url, sha, { cacheDir: cache4, run: plainRun });
+  writeFileSync(join(kept4, '.git', 'HEAD'), 'ref: refs/heads/nowhere\n');
+  const replace4 = () => {
+    renameSync(kept4, join(scratch, `broken-${scratchCount++}`));
+    exec('git', ['clone', '-q', url, kept4], { stdio: 'pipe' });
+  };
+  // The fault is injected where the put-back is made: the cache directory stops being writable after the entry was parked.
+  assert.throws(() => checkoutGit(url, sha, { cacheDir: cache4, run: plainRun, onCondemned: replace4, onParked: () => chmodSync(cache4, 0o555) }), /cannot put the cache entry .* back from .*: .*(EACCES|EPERM|operation not permitted|permission denied)/i);
+  chmodSync(cache4, 0o755);
 });
 
 test('the suite\'s git calls ignore the configuration of the machine: a global commit.gpgsign or core.hooksPath neither breaks nor runs', () => {
@@ -960,8 +1040,9 @@ const sharedManifest = (change, options = { repository: hosterRepository }) => m
 const sharedReport = (change, options = { repository: hosterRepository }) => manifestReport({ 'ovdb.yaml': stringifyYaml(sharedDoc(change)) }, options);
 // The same checks without a commit per case, for tests with hundreds of cases: the files are in memory (this repository's
 // own, and the manifest being tried), and every one counts as a tracked regular file.
-const memoryProblems = (doc, options = { repository: undefined }) => {
+const memoryProblems = (doc, options = { repository: undefined }, changedFiles = {}) => {
   const held = new Map(['OVDB.md', 'model/chinook.modelspec.json', 'model/chinook.modelspec.hcl', 'model/chinook.meaning.yaml'].map((path) => [path, read(path)]));
+  for (const [path, text] of Object.entries(changedFiles)) held.set(path, text);
   held.set('ovdb.yaml', stringifyYaml(doc));
   const files = { problem: () => '', kind: (path) => (held.has(path) ? 'file' : 'missing'), read: (path) => held.get(path) };
   return checkOvdbManifest(files, options).join('\n');
@@ -1065,22 +1146,66 @@ test('homepage is an optional public https URL, in both forms, and need not be o
   ]) {
     for (const [name, problems] of refused(bad)) assert.match(problems, /homepage /, `${name} homepage ${JSON.stringify(bad)}`);
   }
-  // The two attribute-injection values are refused by the rule that is not the Directory's, and say so.
-  assert.match(sharedManifest((m) => { m.homepage = 'https://x"onmouseover="alert(1)"y=".example.com/'; }), /homepage must have a host of lower-case ASCII letters, digits and hyphens/);
-  assert.match(sharedManifest((m) => { m.homepage = "https://example.com/'onmouseover='alert(1)'y='"; }), /homepage must have a path of only letters, digits and \. _ ~ \/ -/);
+  // The two attribute-injection values are refused by the homepage rule, and say so.
+  assert.match(sharedManifest((m) => { m.homepage = 'https://x"onmouseover="alert(1)"y=".example.com/'; }), /homepage host x"onmouseover=.* must be lower-case labels of ASCII letters, digits and hyphen|homepage is not a URL|homepage contains whitespace/);
+  assert.match(sharedManifest((m) => { m.homepage = "https://example.com/'onmouseover='alert(1)'y='"; }), /homepage path may only use A-Z a-z 0-9 \. _ ~ \/ and - \(no quote, ampersand, percent escape or other punctuation\)/);
   // At most 200 characters, boundary included.
   const padded = (length) => `https://example.com/${'a'.repeat(length - 'https://example.com/'.length)}`;
   assert.equal(padded(200).length, 200);
   assert.equal(withManifest((m) => { m.homepage = padded(200); }), '', '200 characters are allowed');
-  assert.match(withManifest((m) => { m.homepage = padded(201); }), /homepage must be at most 200 characters/);
-  assert.match(sharedManifest((m) => { m.homepage = padded(100000); }), /homepage must be at most 200 characters/);
-  // The cap and the stricter rule are for homepage only: other URLs keep the Directory's rules (a long url, a port-less quote-free one).
+  assert.match(withManifest((m) => { m.homepage = padded(201); }), /homepage is longer than 200 characters/);
+  assert.match(sharedManifest((m) => { m.homepage = padded(100000); }), /homepage is longer than 200 characters/);
+  // The 200-character cap is for homepage only (the plain spelling is for every URL, below).
   assert.equal(withManifest((m) => { m.deployment.recordset_page = `https://cloud.openvaultdb.com/ovdb/dbs/chinook/${'x'.repeat(300)}/{name}`; }), '', 'recordset_page has no length cap');
   assert.equal(withManifest((m) => { m.deployment.recordset_page = 'https://cloud.openvaultdb.com/ovdb/dbs/chinook/collections/{name}.html'; }), '');
 });
 
+// Every URL field has one plain spelling, as homepage does (only homepage is capped at 200 characters).
+test('every URL field is plain text: lower-case host labels, a path of A-Z a-z 0-9 . _ ~ / - only', () => {
+  const fields = {
+    url: [(m, v) => { m.url = v; }, 'https://ovdb.example.com', '/dbs/chinook'],
+    'deployment.url': [(m, v) => { m.deployment.url = v; }, 'https://cloud.example.com', '/ovdb/dbs/chinook'],
+    'deployment.discovery': [(m, v) => { m.deployment.discovery = v; }, 'https://chinookdb.com', '/.well-known/openvaultdb'],
+    'deployment.recordset_page': [(m, v) => { m.deployment.recordset_page = v; }, 'https://cloud.openvaultdb.com', '/ovdb/dbs/chinook/collections/{name}'],
+    'publisher.url': [(m, v) => { m.publisher.url = v; }, 'https://github.com', '/datatug'],
+    homepage: [(m, v) => { m.homepage = v; }, 'https://chinookdb.com', '/'],
+  };
+  // The two the Directory's review asked for, in the field they were found in.
+  for (const [name, check] of [['own', ownProblems], ['shared', hosterProblems]]) {
+    assert.match(check((m) => { m.deployment.url = 'https://cloud.a"onmouseover="alert(1).com/ovdb/dbs/chinook'; }), /deployment.url host cloud.a"onmouseover="alert\(1\).com must be lower-case ASCII letters, digits and hyphen/, name);
+    assert.match(check((m) => { m.deployment.url = "https://cloud.acme.com/ovdb/'onmouseover='alert(1)&x"; }), /deployment.url path may only use A-Z a-z 0-9 \. _ ~ \/ and -/, name);
+  }
+  const hosts = ['x"y.example.com', "x'y.example.com", 'x y.example.com', 'x<y.example.com', 'x&y.example.com', 'x_y.example.com', 'x(y).example.com', 'x=y.example.com', 'x;y.example.com', 'x,y.example.com',
+    '-x.example.com', 'x-.example.com', `${'a'.repeat(64)}.example.com`, `${Array.from({ length: 30 }, () => 'abcdefgh').join('.')}.com`, 'xn--bcher-kva.-x.com', 'a..example.com'];
+  const longHost = `${'a'.repeat(63)}.${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(63)}.com`;
+  assert.ok(longHost.length > 253);
+  hosts.push(longHost);
+  const paths = ['/a"b', "/a'b", '/a b', '/a<b>', '/a&b', '/a(b)', '/a,b', '/a;b', '/a=b', '/a@b', '/a:b', '/a!b', '/a*b', '/a+b', '/a$b', '/a[b]', '/a|b', '/a^b', '/a`b', '/a{b}', '/a\\b'];
+  for (const [field, [set, origin, path]] of Object.entries(fields)) {
+    const problems = (value) => [ownProblems((m) => set(m, value)), hosterProblems((m) => set(m, value))];
+    const line = new RegExp(`(^|\\n)ovdb\\.yaml: ${field.replace('.', '\\.')} `);
+    for (const bad of paths) for (const text of problems(`${origin}${path.replace(/\/[^/]*$/, '')}${bad}${path.endsWith('{name}') ? '/{name}' : ''}`)) assert.match(text, line, `${field}: ${bad}`);
+    for (const host of hosts) for (const text of problems(`https://${host}${path}`)) assert.match(text, line, `${field}: host ${host}`);
+    for (const text of problems(`${origin}${path}`)) assert.doesNotMatch(text, line, `${field}: control ${origin}${path}`);
+  }
+  // The same rule applies to the template's real names, and the placeholder is allowed where it was.
+  assert.equal(ownProblems((m) => { m.deployment.recordset_page = 'https://cloud.openvaultdb.com/ovdb/dbs/chinook/collections/{name}'; }), '');
+  assert.match(ownProblems((m) => { m.deployment.recordset_page = "https://cloud.openvaultdb.com/c/{name}/'x"; }), /recordset_page path may only use/);
+  assert.match(ownProblems((m) => { m.deployment.recordset_page = 'https://cloud.openvaultdb.com/c/{name}&x'; }), /recordset_page path may only use/);
+  // A host of 253 characters is the limit, and 63 per label.
+  const label63 = 'a'.repeat(63);
+  const host253 = `${label63}.${label63}.${label63}.${'d'.repeat(61)}`;
+  assert.equal(host253.length, 253);
+  assert.doesNotMatch(ownProblems((m) => { m.deployment.url = `https://${host253}/ovdb/dbs/chinook`; m.deployment.recordset_page = undefined; delete m.deployment.recordset_page; }), /deployment.url host/);
+  assert.match(ownProblems((m) => { m.deployment.url = `https://${host253}a/ovdb/dbs/chinook`; delete m.deployment.recordset_page; }), /deployment.url (host|is not a URL)/);
+  // This repository's manifest and the example are held to it and pass.
+  assert.equal(ownProblems(() => {}), '');
+  assert.equal(memoryProblems(exampleDoc(), { repository: exampleRepository }), '');
+});
+
 // The Directory's URL rules apply to every URL field of the manifest, in both forms (directory-rules.mjs mirrors
-// openvaultdb/directory a4aebb7 plus two refusals: any port, any percent escape in the path).
+// openvaultdb/directory's urls.mjs and directory.mjs, including the refusal of any port and of any percent escape in the path,
+// plus one plain spelling for every URL field).
 test('every URL field is held to the Directory\'s rules: spelling, reserved names, ports, percent escapes', () => {
   const fields = {
     url: (m, v) => { m.url = v; },
@@ -1106,8 +1231,8 @@ test('every URL field is held to the Directory\'s rules: spelling, reserved name
     };
     // Control: the right spelling of the same field is accepted, so that every refusal below is about the spelling.
     for (const check of [ownProblems, hosterProblems]) assert.doesNotMatch(check((m) => set(m, `https://${host}${path}`)), line, `${field}: https://${host}${path}`);
-    refusing(`https://${host}:8443${path}`, /must not contain a port|must have a host/, 'a port');
-    refusing(`https://${host}:443${path}`, /must not contain a port|must have a host/, 'the default port written out');
+    refusing(`https://${host}:8443${path}`, /must not name a port|must have a host/, 'a port');
+    refusing(`https://${host}:443${path}`, /must not name a port|must have a host/, 'the default port written out');
     refusing(`https://${host}/a%2Fb${path}`, /must not contain a percent escape|must have a path/, 'a percent escape');
     refusing(`https://${host}/a%41b${path}`, /must not contain a percent escape|must have a path/, 'an escaped letter');
     refusing(`https://${host}.${path}`, undefined, 'trailing dot');
@@ -1133,10 +1258,10 @@ test('every URL field is held to the Directory\'s rules: spelling, reserved name
     only(check, fields['deployment.url'], 'https://cloud.example.com', /deployment.url is not written canonically \(it would be https:\/\/cloud.example.com\/\)/);
     only(check, fields.url, 'https://ovdb.example.com/dbs/chinook/', /url must not have a trailing slash/);
     only(check, fields.url, 'https://ovdb.co.uk/dbs/chinook', /url must have ovdb as a complete path segment or as a subdomain/);
-    only(check, fields['deployment.url'], 'https://cloud.example.com:8443/ovdb/dbs/x', /deployment.url must not contain a port/);
+    only(check, fields['deployment.url'], 'https://cloud.example.com:8443/ovdb/dbs/x', /deployment.url must not name a port/);
     only(check, fields['deployment.url'], 'https://cloud.example.com/ovdb%2Fdbs/x', /deployment.url must not contain a percent escape/);
-    only(check, fields['deployment.discovery'], 'https://chinookdb.com:443/.well-known/openvaultdb', /deployment.discovery must not contain a port/);
-    only(check, fields['deployment.recordset_page'], 'https://cloud.openvaultdb.com/c/%2e%2e/', /must not contain a percent escape/);
+    only(check, fields['deployment.discovery'], 'https://chinookdb.com:443/.well-known/openvaultdb', /deployment.discovery must not name a port/);
+    only(check, fields['deployment.recordset_page'], 'https://cloud.openvaultdb.com/c/%2e%2e/', /is not written canonically|must not contain a percent escape/);
     only(check, (m, v) => { m.deployment.recordset_page = v; m.deployment.url = 'https://name.example.com/ovdb'; }, 'https://{name}.example.com/c', /recordset_page must have \{name\} in the path only/);
   }
   // The id and the engine, as the Directory spells them.
@@ -1319,7 +1444,7 @@ test('an own manifest of a mixed-case or dot-named repository: model.address in 
   assert.match(own('DataTug/ChinookDB', (doc) => { doc.model.address = 'modelspec://github.com/DataTug/ChinookDB/chinook'; }), /model.address .* must be written in lower case/);
   assert.match(own('DataTug/ChinookDB', (doc) => { doc.model.address = 'modelspec://github.com/datatug/chinookdb/Chinook'; }), /model.address must be modelspec:\/\/github.com\/datatug\/chinookdb\/chinook, this repository plus the module name/);
   assert.match(own('datatug/chinookdb', (doc) => { doc.model.address = 'modelspec://github.com/datatug/other/chinook'; }), /model.address must be modelspec:\/\/github.com\/datatug\/chinookdb\/chinook/);
-  // What the Directory enforces on meaning.graph.address (a4aebb7): it equals the MeaningGraph registry's record verbatim, and that
+  // What the Directory enforces on meaning.graph.address: it equals the MeaningGraph registry's record verbatim, and that
   // record is for this repository in whatever case the registry has it; publisher.repository may be in any case. Offline: this
   // repository, in any case, whichever case publisher.repository is in.
   for (const [repo, address] of [['DataTug/ChinookDB', 'meaning://github.com/datatug/chinookdb'], ['datatug/chinookdb', 'meaning://github.com/DataTug/ChinookDB'], ['DataTug/chinookdb', 'meaning://github.com/datatug/ChinookDB']]) {
@@ -1640,7 +1765,7 @@ test('examples/hoster passes the checker, has the keys of a shared manifest as t
   assert.equal(canonicalUrlProblem(doc.url), null);
   for (const value of [doc.deployment.url, doc.deployment.discovery, doc.publisher.url]) assert.equal(publicHttpsProblem(value), null, value);
   assert.equal(publicHttpsProblem(doc.deployment.recordset_page, { template: true }), null);
-  assert.equal(homepageProblem(doc.homepage), null);
+  assert.equal(homepageFieldProblem(doc.homepage), null);
   assert.equal(new URL(doc.deployment.discovery).origin, new URL(doc.url).origin, 'the discovery document is on the canonical origin');
 
   // The pin: a commit of this repository, with the model and the meaning file the addresses name. It is read from this
@@ -1695,7 +1820,7 @@ test('examples/hoster fails the checker when it is damaged the way a hoster coul
   assert.match(broken((d) => { d.url = 'https://ovdb.example.com/dbs/chinook/'; }), /url must not have a trailing slash/);
   assert.match(broken((d) => { d.deployment.url = 'https://cloud.example.com'; }), /deployment.url is not written canonically/);
   assert.match(broken((d) => { d.deployment.engine = 'Cloud SQL'; }), /deployment.engine is required/);
-  assert.match(broken((d) => { d.homepage = 'https://example.com:8443/'; }), /homepage must not contain a port/);
+  assert.match(broken((d) => { d.homepage = 'https://example.com:8443/'; }), /homepage must not name a port/);
 });
 
 test('the command line says it is a pre-check, in both forms, and checks the directory it is given', () => {
@@ -1755,12 +1880,13 @@ test('the command line says it is a pre-check, in both forms, and checks the dir
 });
 
 // Single-field edits of the two bases (this repository's own manifest, and examples/hoster) that the OVDB Directory refuses
-// without looking at a registry or a repository: openvaultdb/directory a4aebb7 (the head of its pull request 8) plus the
-// port and percent-escape refusals that branch is adding. Each was run through the Directory's own manifestProblems and
-// the spelling rules of its analyseDatabase when this list was made (a differential run of 99 edits and 4590 further
-// variants: the checker passed none that the Directory refused). The checker must refuse every one. `forms`: where
-// the edit applies. The three entries that start with "homepage" and the 201-character one are refused here only: the
-// homepage rule is not the Directory's yet.
+// without looking at a registry or a repository: the rules of openvaultdb/directory's scripts/lib/urls.mjs and
+// scripts/lib/directory.mjs, which scripts/lib/directory-rules.mjs mirrors. Each was run through the Directory's own
+// manifestProblems and the spelling rules of its analyseDatabase when it was added (differential runs of hundreds of edits
+// and thousands of further variants: the checker passed none that the Directory refused, apart from the documented gaps).
+// The checker must refuse every one. `forms`: where the edit applies. An entry may carry a fourth element, the changes to
+// the model or meaning file that go with the edit.
+const meaningText = () => read('model/chinook.meaning.yaml');
 const long = (n, c = 'a') => c.repeat(n);
 const directoryRefuses = [
   // URL spelling (the reviewer's table)
@@ -1797,6 +1923,12 @@ const directoryRefuses = [
   ['homepage on .svc', 'both', (m) => { m.homepage = 'https://grafana.monitoring.svc/'; }],
   ['homepage with a trailing dot', 'both', (m) => { m.homepage = 'https://printer.local./'; }],
   ['publisher.url with a query', 'both', (m) => { m.publisher.url = 'https://github.com/datatug?x=1'; }],
+  // the plain spelling of every URL (stricter than the Directory's rule where that is looser)
+  ['deployment.url with a quote in the host', 'both', (m) => { m.deployment.url = 'https://cloud.a"onmouseover="alert(1).com/ovdb/dbs/chinook'; }],
+  ['deployment.url with a quote in the path', 'both', (m) => { m.deployment.url = "https://cloud.acme.com/ovdb/'onmouseover='alert(1)&x"; }],
+  ['recordset_page with an ampersand in the path', 'both', (m) => { m.deployment.recordset_page = 'https://cloud.openvaultdb.com/c/{name}&x'; }],
+  ['publisher.url with a parenthesis in the path', 'both', (m) => { m.publisher.url = 'https://github.com/datatug(x)'; }],
+  ['deployment.url with an underscore in the host', 'both', (m) => { m.deployment.url = 'https://cloud_1.example.com/ovdb/dbs/chinook'; }],
   // the two refusals the Directory is adding
   ['deployment.url with a port', 'both', (m) => { m.deployment.url = 'https://cloud.example.com:8443/ovdb/dbs/x'; }],
   ['deployment.url with :443', 'both', (m) => { m.deployment.url = 'https://cloud.example.com:443/ovdb/dbs/x'; }],
@@ -1805,10 +1937,19 @@ const directoryRefuses = [
   ['recordset_page with %41', 'both', (m) => { m.deployment.recordset_page = 'https://cloud.example.com/c%41/{name}'; }],
   ['url with a port', 'both', (m) => { m.url = 'https://ovdb.example.com:8443/dbs/chinook'; }],
   ['publisher.url with a port', 'both', (m) => { m.publisher.url = 'https://github.com:443/datatug'; }],
-  // the homepage rule (not the Directory's yet)
+  // the homepage rule
   ['homepage with a quote in the host', 'both', (m) => { m.homepage = 'https://x"onmouseover="alert(1)"y=".example.com/'; }],
   ['homepage with a quote in the path', 'both', (m) => { m.homepage = "https://example.com/'onmouseover='alert(1)'y='"; }],
   ['homepage of 201 characters', 'both', (m) => { m.homepage = `https://example.com/${long(181)}`; }],
+  // own form: the graph id and the models: entry are spelled as the Directory spells them, even when the meaning file agrees
+  ['meaning.graph.id with an upper-case letter and an underscore', 'own', (m) => { m.meaning.graph.id = 'Chinook_1'; }, () => ({ 'model/chinook.meaning.yaml': meaningText().replace(/^id: chinook$/m, 'id: Chinook_1') })],
+  ['meaning.graph.id with a double hyphen', 'own', (m) => { m.meaning.graph.id = 'a--b'; }, () => ({ 'model/chinook.meaning.yaml': meaningText().replace(/^id: chinook$/m, 'id: a--b') })],
+  ['meaning.graph.id ending in a hyphen', 'own', (m) => { m.meaning.graph.id = 'chinook-'; }, () => ({ 'model/chinook.meaning.yaml': meaningText().replace(/^id: chinook$/m, 'id: chinook-') })],
+  ['models: entry with an empty segment (.//)', 'own', () => {}, () => ({ 'model/chinook.meaning.yaml': meaningText().replace('  chinook: chinook.modelspec.hcl\n', '  chinook: .//chinook.modelspec.hcl\n') })],
+  ['models: entry with a space and a dot-dot', 'own', () => {}, () => ({ 'model/chinook.meaning.yaml': meaningText().replace('  chinook: chinook.modelspec.hcl\n', '  chinook: "x y/../chinook.modelspec.hcl"\n') })],
+  ['models: entry that is absolute', 'own', () => {}, () => ({ 'model/chinook.meaning.yaml': meaningText().replace('  chinook: chinook.modelspec.hcl\n', '  chinook: /model/chinook.modelspec.hcl\n') })],
+  ['models: entry that leaves the repository', 'own', () => {}, () => ({ 'model/chinook.meaning.yaml': meaningText().replace('  chinook: chinook.modelspec.hcl\n', '  chinook: ../../chinook.modelspec.hcl\n') })],
+  ['models: entry with a glob', 'own', () => {}, () => ({ 'model/chinook.meaning.yaml': meaningText().replace('  chinook: chinook.modelspec.hcl\n', '  chinook: "*.modelspec.hcl"\n') })],
   // own form: paths
   ['model.modelspec with a space', 'own', (m) => { m.model.modelspec = 'model/chinook v2.modelspec.json'; }],
   ['model.modelspec with @ and +', 'own', (m) => { m.model.modelspec = 'model/chinook@1+x.modelspec.json'; }],
@@ -1836,15 +1977,15 @@ test('the checker refuses every one of a list of single-field edits that the Dir
   let tried = 0;
   const accepted = [];
   for (const [form, [base, options]] of Object.entries(bases)) {
-    for (const [label, forms, apply] of directoryRefuses) {
+    for (const [label, forms, apply, changed = () => ({})] of directoryRefuses) {
       if (forms !== 'both' && forms !== form) continue;
       const doc = base();
       apply(doc);
       tried += 1;
-      if (memoryProblems(doc, options) === '') accepted.push(`${form}: ${label}`);
+      if (memoryProblems(doc, options, changed()) === '') accepted.push(`${form}: ${label}`);
     }
   }
-  assert.ok(tried >= 95, `${tried} edits tried`);
+  assert.ok(tried >= 105, `${tried} edits tried`);
   assert.deepEqual(accepted, [], 'passes here, refused by the Directory');
 });
 

@@ -9,7 +9,7 @@ description: >-
   tracks, playlists, customers, employees and invoices. Read-only, served from
   a pinned copy of the upstream SQLite fixture.
 
-# The publisher's own page for the database (shown as Website on the OVDB Directory page).
+# The publisher's own page for the database: the Directory publishes it in its index, and its site may show it as "Website".
 homepage: https://chinookdb.com/
 
 # The canonical identity of the database. It stays the same if the deployment moves.

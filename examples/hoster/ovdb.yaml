@@ -20,7 +20,7 @@ title: Chinook at Example Co
 description: >-
   The Chinook sample database, hosted by Example Co.
 
-# PLACEHOLDER: optional. Your own page for the database; the Directory shows it as Website. Any public https URL.
+# PLACEHOLDER: optional. Your own page for the database, published in the Directory's index. An https URL of at most 200 characters, lower-case host, plain path (A-Z a-z 0-9 . _ ~ / -), no port.
 homepage: https://example.com/chinook/
 
 # PLACEHOLDER: the canonical identity of your database, a public https URL with `ovdb` as a path segment or

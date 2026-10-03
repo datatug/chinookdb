@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { cleanGitEnv } from './git-env.mjs';
-import { canonicalUrlProblem, enginePattern, homepageProblem, idPattern, isRepositoryPath, maxIdLength, publicHttpsProblem } from './directory-rules.mjs';
+import { canonicalUrlProblem, enginePattern, homepageFieldProblem, idPattern, isRepositoryPath, manifestUrlProblem, maxIdLength } from './directory-rules.mjs';
 
 // Checks the OpenVaultDB publisher manifest: the root OVDB.md that opts the repository in and the
 // manifest files it lists.
@@ -35,8 +35,8 @@ import { canonicalUrlProblem, enginePattern, homepageProblem, idPattern, isRepos
 // `recordsets_partial: true` says that `recordsets` lists a subset of the model's entities. Neither
 // address may name the publisher's own repository.
 //
-// Both forms may have an optional `homepage`: the publisher's own page for the database, under a stricter
-// URL rule than the Directory's (see directory-rules.mjs: 200 characters, plain ASCII host and path).
+// Both forms may have an optional `homepage`: the publisher's own page for the database, under the Directory's
+// homepage rule (see directory-rules.mjs: 200 characters, plain ASCII host and path).
 //
 // This is an offline PRE-CHECK, not the Directory's verdict, and the Directory is the authority. The URL, id,
 // engine and path rules are the Directory's own (directory-rules.mjs). It does not parse the model or the meaning
@@ -260,7 +260,7 @@ function analyseManifest(path, files, { repository } = {}) {
   if (isText(manifest.id) && (!idPattern.test(manifest.id) || manifest.id.length > maxIdLength)) bad(`id must be lower-case letters, digits and single hyphens, at most ${maxIdLength} characters`);
 
   // A URL the manifest publishes, under the Directory's rules (directory-rules.mjs); returns it parsed, or undefined.
-  const checkUrl = (value, label, { check = publicHttpsProblem, ...options } = {}) => {
+  const checkUrl = (value, label, { check = manifestUrlProblem, ...options } = {}) => {
     if (value === undefined || value === null || value === '') {
       bad(`${label} is required`);
       return undefined;
@@ -275,10 +275,10 @@ function analyseManifest(path, files, { repository } = {}) {
 
   // The canonical identity, and the places it is served and discovered.
   const canonical = checkUrl(manifest.url, 'url', { check: canonicalUrlProblem });
-  // The publisher's own page for the database: any public https URL on any origin, under the stricter
-  // homepage rule (200 characters at most, plain ASCII host and path), which the Directory does not have.
+  // The publisher's own page for the database: on any origin, under the Directory's homepage rule (200 characters at most,
+  // a lower-case ASCII host, a plain path).
   if (manifest.homepage !== undefined) {
-    const problem = homepageProblem(manifest.homepage);
+    const problem = homepageFieldProblem(manifest.homepage);
     if (problem) bad(`homepage ${problem}`);
   }
   const deployment = manifest.deployment;
@@ -299,7 +299,7 @@ function analyseManifest(path, files, { repository } = {}) {
   need(manifest.publisher, 'name', 'publisher.name');
   const publisherUrl = manifest.publisher?.url;
   const owner = checkUrl(publisherUrl, 'publisher.url') && githubOwner(publisherUrl);
-  if (publisherUrl && !owner && !publicHttpsProblem(publisherUrl)) bad('publisher.url must be https://github.com/<owner>');
+  if (publisherUrl && !owner && !manifestUrlProblem(publisherUrl)) bad('publisher.url must be https://github.com/<owner>');
   const repo = manifest.publisher?.repository;
   const repoParts = typeof repo === 'string' ? githubRepo(repo) : undefined;
   if (!isText(repo)) bad('publisher.repository is required');
@@ -434,6 +434,7 @@ function analyseManifest(path, files, { repository } = {}) {
     // The meaning graph is the one the meaning file declares, at the address of this repository.
     const graph = manifest.meaning?.graph;
     need(graph, 'id', 'meaning.graph.id');
+    if (isText(graph?.id) && !graphIdPattern.test(graph.id)) bad('meaning.graph.id must be a MeaningGraph registry id: lower-case letters, digits and single hyphens');
     need(graph, 'address', 'meaning.graph.address');
     if (readable['meaning.file']) {
       const text = load(readable['meaning.file']);
@@ -456,11 +457,15 @@ function analyseManifest(path, files, { repository } = {}) {
         // model.hcl is the meaning file's models: entry for the module (relative to the meaning file); the
         // Directory takes model.path from that entry and compares it with the manifest.
         if (readable['model.hcl'] && moduleName !== undefined) {
-          const entry = isObject(meaning.models) ? meaning.models[moduleName] : undefined;
+          const entry = isObject(meaning.models) && Object.hasOwn(meaning.models, moduleName) ? meaning.models[moduleName] : undefined;
           if (!isText(entry)) bad(`the meaning file ${readable['meaning.file']} has no models: entry for module ${moduleName}`);
           else {
-            const resolved = posix.join(posix.dirname(readable['meaning.file']), entry);
-            if (readable['model.hcl'] !== resolved) bad(`model.hcl is ${readable['model.hcl']} but the meaning file's models: entry for ${moduleName} is ${resolved}`);
+            // The entry is spelled as the Directory requires before it is joined to the meaning file's directory: letters, digits
+            // and . _ / - only, no leading / and no empty segment (so no `.//x`, no `x y/../x`). posix.join would normalise those away.
+            const resolved = /^[A-Za-z0-9_.\/-]+$/.test(entry) && !entry.startsWith('/') && !entry.includes('//') ? posix.join(posix.dirname(readable['meaning.file']), entry) : null;
+            if (resolved === null || resolved === '..' || resolved.startsWith('../') || !isRepositoryPath(resolved)) {
+              bad(`${readable['meaning.file']}: models must name the ModelSpec module ${moduleName} with a relative path that stays inside the repository (no leading /, no empty segment, no glob, no escaping with ..), got ${JSON.stringify(entry)}`);
+            } else if (readable['model.hcl'] !== resolved) bad(`model.hcl is ${readable['model.hcl']} but the meaning file's models: entry for ${moduleName} is ${resolved}`);
           }
         }
       }
@@ -520,9 +525,9 @@ function analyseManifest(path, files, { repository } = {}) {
     const misshapen = recordsets.filter((name) => !entityName.test(name));
     if (misshapen.length) bad(`recordsets names must look like ModelSpec entity names (letters, digits, underscore): ${misshapen.map((name) => JSON.stringify(name)).join(', ')}`);
     // Every recordset page the template makes is a URL the Directory checks again with the real name.
-    if (isText(page) && !misshapen.length && !publicHttpsProblem(page, { template: true })) {
+    if (isText(page) && !misshapen.length && !manifestUrlProblem(page, { template: true })) {
       for (const name of recordsets) {
-        const problem = publicHttpsProblem(page.replace('{name}', name));
+        const problem = manifestUrlProblem(page.replace('{name}', name));
         if (problem) bad(`the recordset page of ${name}, ${page.replace('{name}', name)}, ${problem}`);
       }
     }

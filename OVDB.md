@@ -15,7 +15,7 @@ live deployment, the ModelSpec model, the MeaningGraph meaning file, the
 publisher and the licences.
 
 An optional top-level `homepage` is the publisher's own page for the database,
-a public https URL; the Directory shows it as Website on the database's page.
+an https URL of at most 200 characters; the Directory publishes it in its index, and its site may show it as "Website".
 
 A manifest names its ModelSpec model in one of two ways: by local files
 (`model.modelspec` and `model.hcl`), or, when the model lives in another

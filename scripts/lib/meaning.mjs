@@ -137,11 +137,14 @@ const lstatOrNull = (path) => { try { return lstatSync(path); } catch (error) { 
 // failure while verifying (another process holds the index lock) is looked at again before an entry is
 // condemned. An entry is removed only when this process examined it and condemned it: it is renamed aside, and if
 // what was moved is not the directory that was examined (another process replaced the entry in between) it is put
-// back untouched and looked at afresh. `.discard-*` directories left by a crash are removed on entry, and so is a
-// `.meaning-source-*` work directory older than `staleMs`. Every git call is hardened (see `hardening`, --template=
+// back untouched and looked at afresh. Parked entries (`.discard-<pid>-<time>-*`) whose process is gone or that are
+// older than `discardStaleMs` are removed on entry, never a young one of a live process, and so is a `.meaning-source-*`
+// work directory older than `staleMs`. Every git call is hardened (see `hardening`, --template=
 // on init, --end-of-options before a url, ref or path). `run(command, args)` runs git; tests replace it, and
-// `onCondemned(dir)` is called between the verdict and the removal, where a test makes another process act.
-export function checkoutGit(url, ref, { cacheDir, tempDir = tmpdir(), run = defaultRun, retries = 3, retryDelayMs = 1000, staleMs = 60 * 60 * 1000, onCondemned } = {}) {
+// Known gap (datatug/chinookdb#16): git still runs in the entry, so a filter driver in the entry's own configuration runs.
+// `onCondemned(dir)` is called between the verdict and the removal, and `onParked(aside)` between parking and the identity
+// comparison, where a test makes another process act.
+export function checkoutGit(url, ref, { cacheDir, tempDir = tmpdir(), run = defaultRun, retries = 3, retryDelayMs = 1000, staleMs = 60 * 60 * 1000, discardStaleMs = 10 * 60 * 1000, onCondemned, onParked } = {}) {
   const git = (dir, ...args) => run('git', [...hardening, '-C', dir, ...args]);
   // git is pointed at dir/.git explicitly, so that a directory that is not a repository of its own (inside the
   // cache, inside the project's own repository) is never reset or cleaned by mistake.
@@ -170,32 +173,46 @@ export function checkoutGit(url, ref, { cacheDir, tempDir = tmpdir(), run = defa
     return false;
   };
   // Removes the entry this process examined (`examined`: its lstat) and condemned. 'discarded', 'gone' (nothing there any
-  // more), or 'replaced' (another process put a different entry there first, which was put back and not touched).
+  // more), or 'replaced' (another process put a different entry there first, which was put back and not touched). The entry
+  // is parked as `.discard-<pid>-<time>-<uuid>`: the sweep (below) leaves a name whose process is alive and that is young,
+  // so that no other process removes what this one is about to put back.
   const discard = (dir, examined, parent) => {
-    const aside = join(parent, `.discard-${process.pid}-${randomUUID()}`);
+    const aside = join(parent, `.discard-${process.pid}-${Date.now()}-${randomUUID()}`);
     try { renameSync(dir, aside); } catch (error) {
       if (error.code === 'ENOENT') return 'gone';
       throw new Error(`cannot move the unusable cache entry ${dir} aside: ${error.message}`);
     }
-    const moved = lstatSync(aside);
-    if (moved.dev !== examined.dev || moved.ino !== examined.ino) {
+    onParked?.(aside);
+    const moved = lstatOrNull(aside);
+    if (moved === null) return 'gone'; // removed by a sweep (this process crashed and came back, or it took too long): nothing to put back
+    if (moved.dev !== examined.dev || moved.ino !== examined.ino || moved.birthtimeMs !== examined.birthtimeMs) {
       try { renameSync(aside, dir); } catch (error) {
         // Another entry was made at `dir` meanwhile; the one moved aside is a duplicate that nobody reads from here. It is
-        // left for the next sweep rather than removed unexamined.
-        if (!['EEXIST', 'ENOTEMPTY'].includes(error.code)) throw new Error(`cannot put the cache entry ${dir} back: ${error.message}`);
+        // left for the sweep, which removes it when this process is gone or ten minutes have passed.
+        if (!['EEXIST', 'ENOTEMPTY'].includes(error.code)) {
+          throw new Error(`cannot put the cache entry ${dir} back from ${aside}: ${error.code === 'ENOENT' ? 'it was removed by another process in the meantime (the entry another process was using is gone; run again)' : error.message}`);
+        }
       }
       return 'replaced';
     }
     rmSync(aside, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     return 'discarded';
   };
-  // What a crash left in the cache: discarded entries (nobody reads them), and work directories nobody has touched for `staleMs`.
+  // Whether a process is alive: signal 0 only checks (EPERM: it exists, and is somebody else's).
+  const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
+  // What a crash left in the cache: parked entries whose process is gone or that are older than `discardStaleMs` (a live
+  // process may be about to put one back), and work directories nobody has touched for `staleMs`. Links are never followed.
   const sweep = (parent) => {
     let names;
     try { names = readdirSync(parent); } catch { return; }
     for (const name of names) {
       const path = join(parent, name);
-      if (name.startsWith('.discard-') || (name.startsWith('.meaning-source-') && Date.now() - (lstatOrNull(path)?.mtimeMs ?? Date.now()) > staleMs)) rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      const parked = /^\.discard-(\d+)-(\d+)-/.exec(name);
+      const stale = parked
+        ? !alive(Number(parked[1])) || Date.now() - Number(parked[2]) > discardStaleMs
+        : name.startsWith('.discard-') ? Date.now() - (lstatOrNull(path)?.mtimeMs ?? Date.now()) > discardStaleMs // not a name this code makes: by age alone
+          : name.startsWith('.meaning-source-') && Date.now() - (lstatOrNull(path)?.mtimeMs ?? Date.now()) > staleMs;
+      if (stale) rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   };
   const kept = cacheDir && commit.test(ref) ? join(cacheDir, ref) : null;

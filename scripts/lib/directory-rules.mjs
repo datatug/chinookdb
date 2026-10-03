@@ -1,20 +1,16 @@
 // The OVDB Directory's own rules for what a manifest publishes, ported for the offline pre-check
 // (CC0-1.0, like the Directory's files).
 //
-// MIRRORS openvaultdb/directory at commit a4aebb7f6d3bccc98348f809963ea66cc280439c (the head of its
-// pull request 8) PLUS two refusals that the Directory is adding to every URL field on that branch: any port
-// (including :443) and any percent escape in the path (outside recordset_page's {name}). Both are marked
-// "PLUS" below; they stand until the next head of openvaultdb/directory PR 8, which this file then follows.
-// From `scripts/lib/urls.mjs` come publicHttpsProblem, hostProblem and hasOvdbMarker (copied, the file's opening
-// comment is not repeated); from `scripts/lib/directory.mjs` the canonical-url rule (urlProblem), the id pattern
-// (idPattern, at most 80 characters) and the deployment.engine pattern; from `scripts/lib/git.mjs`
-// isRepositoryPath. When the Directory changes
-// one of them, change it here, and scripts/test-model.mjs (the refusals that it pins) with it.
-//
-// `homepageProblem` is NOT the Directory's: it is a stricter rule for the one field that a page puts
-// in a link, written to be safe in an attribute and in a URL whatever the HTML around it.
+// MIRRORS `scripts/lib/urls.mjs` and `scripts/lib/directory.mjs` of openvaultdb/directory: publicHttpsProblem,
+// hostProblem, hasOvdbMarker and homepageProblem are copied from urls.mjs (the file's opening comment is not
+// repeated; it includes the refusal of any port, even :443, and of any percent escape in a path), and from
+// directory.mjs the canonical-url rule (urlProblem), the id pattern (at most 80 characters), the
+// deployment.engine pattern and the `homepage` field check, and from git.mjs isRepositoryPath. When the
+// Directory changes one of them, change it here. The list of single-field edits in scripts/test-model.mjs
+// ("the checker refuses every one of ...") pins the agreement: each edit was refused by the Directory's own
+// manifestProblems when it was added, and the checker must refuse it too.
 
-// ---- scripts/lib/urls.mjs @ a4aebb7, plus the two refusals marked PLUS ----
+// ---- scripts/lib/urls.mjs ----
 
 // Names that are never public: local, internal and reserved naming zones.
 const privateSuffixes = [
@@ -73,13 +69,10 @@ export function publicHttpsProblem(value, { template = false } = {}) {
   if (url.hash || probe.includes('#')) return 'must not contain a fragment';
   const problem = hostProblem(url);
   if (problem) return problem;
-  // PLUS (not in a4aebb7): no port at all, not even the default one written out (:443).
-  if (url.port !== '' || /^https:\/\/[^/?#]*:/.test(probe)) return 'must not contain a port';
+  // The parser drops the default port, so look at the text: any ":" in the authority is a port.
+  if (probe.slice('https://'.length).split('/')[0].includes(':')) return 'must not name a port (not even :443): a deployment is reached on the default https port';
   if (url.pathname.includes('//')) return 'has an empty path segment (//)';
-  // PLUS (not in a4aebb7): no percent escape at all in the path, outside the {name} placeholder (which `probe` has
-  // already replaced). The Directory's rule above refuses only an escape of an unreserved character; %2F and %2E%2E
-  // are other spellings of a path the URL does not show.
-  if (url.pathname.includes('%') || /^https:\/\/[^/?#]*\/[^?#]*%/.test(probe)) return 'must not contain a percent escape in the path (write the character itself)';
+  if (url.pathname.includes('%')) return 'must not contain a percent escape in the path (write the character itself, or leave it out)';
   // The literal text must be the URL's own spelling, so that what is checked is
   // what is published (no %2e dot segments, no mixed-case host, no decoded host).
   if (url.href !== probe) return `is not written canonically (it would be ${url.href})`;
@@ -100,17 +93,64 @@ export function hasOvdbMarker(value) {
   return labels.slice(0, labels.length - suffixLabels - 1).includes('ovdb');
 }
 
-// ---- scripts/lib/directory.mjs and scripts/lib/git.mjs @ a4aebb7 ----
+// What the index guarantees about a manifest's `homepage`, on top of publicHttpsProblem (https, no
+// userinfo, query or fragment, no port, a public host written canonically): at most 200 characters; a
+// lower-case host of two or more dot-separated labels of ASCII letters, digits and hyphen (no label starts
+// or ends with a hyphen); a path of only A-Z a-z 0-9 . _ ~ / - (no percent escape, no quote, ampersand or
+// other punctuation). A site that shows the value must still HTML-escape it, and must not put it in a
+// single-quoted or unquoted attribute.
+export const homepageMaxLength = 200;
+const homepageLabel = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+export function homepageProblem(value) {
+  const problem = publicHttpsProblem(value);
+  if (problem) return problem;
+  if (value.length > homepageMaxLength) return `is longer than ${homepageMaxLength} characters`;
+  const url = new URL(value);
+  const labels = url.hostname.split('.');
+  if (labels.length < 2 || !labels.every((label) => homepageLabel.test(label))) return `host ${url.hostname} must be lower-case labels of ASCII letters, digits and hyphen (none starting or ending with a hyphen), at least two, separated by dots`;
+  if (!/^[A-Za-z0-9._~/-]*$/.test(url.pathname)) return 'path may only use A-Z a-z 0-9 . _ ~ / and - (no quote, ampersand, percent escape or other punctuation)';
+  return null;
+}
+
+// ---- the rule for every URL field of a manifest ----
+
+const urlLabel = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const urlPath = /^[A-Za-z0-9._~/-]*$/;
+
+// A problem with `value` as a URL a manifest publishes, or null: publicHttpsProblem (the Directory's rule) and, on top
+// of it, one plain spelling for every URL field, so that it is text that needs no escaping in an HTML attribute, a JSON
+// string or a command line, whatever a page does with it: a host of lower-case ASCII letters, digits and hyphen in
+// dot-separated labels (1 to 63 characters each, none starting or ending with a hyphen, at least two, 253 characters in
+// all, no trailing dot); no port; a path of only A-Z a-z 0-9 . _ ~ / and - (and, with `template`, the one literal {name}
+// of recordset_page), no percent escape, no `//`, no dot segment. This is at least as strict as the Directory's rule,
+// and stricter wherever that is looser; the 200-character cap is homepage's alone.
+export function manifestUrlProblem(value, options = {}) {
+  const problem = publicHttpsProblem(value, options);
+  if (problem) return problem;
+  const [, authority, path] = /^https:\/\/([^/]*)(\/.*)$/.exec(value) ?? [];
+  if (authority === undefined) return 'must be https://<host>/<path>';
+  const labels = authority.split('.');
+  if (authority.length > 253 || labels.length < 2 || !labels.every((label) => urlLabel.test(label))) return `host ${authority} must be lower-case ASCII letters, digits and hyphen in dot-separated labels (1 to 63 characters each, none starting or ending with a hyphen, at least two, 253 characters in all)`;
+  const plainPath = options.template ? path.replace('{name}', '') : path;
+  if (!urlPath.test(plainPath)) return 'path may only use A-Z a-z 0-9 . _ ~ / and - (no quote, ampersand, parenthesis, percent escape or other punctuation)';
+  return null;
+}
+
+// ---- scripts/lib/directory.mjs and scripts/lib/git.mjs ----
 
 // A problem with `value` as a database's canonical url, or null: a public https URL without a trailing
 // slash, with `ovdb` as a complete path segment or as a subdomain (see hasOvdbMarker).
 export function canonicalUrlProblem(value) {
-  const problem = publicHttpsProblem(value);
+  const problem = manifestUrlProblem(value);
   if (problem) return problem;
   if (value.endsWith('/')) return 'must not have a trailing slash';
   if (!hasOvdbMarker(value)) return 'must have ovdb as a complete path segment or as a subdomain (https://acme.com/ovdb/sales or https://ovdb.acme.com/sales)';
   return null;
 }
+
+// A problem with the manifest's `homepage` as the Directory checks the field, or null.
+// The Directory's own homepage rule first, then the plain spelling every URL field has (label lengths, host length).
+export const homepageFieldProblem = (value) => (typeof value === 'string' && value !== '' ? homepageProblem(value) ?? manifestUrlProblem(value) : 'is not a URL (leave homepage out when the database has no website)');
 
 // A database id: the record key and the manifest's id.
 export const idPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -120,27 +160,3 @@ export const enginePattern = /^[A-Za-z][A-Za-z0-9_.+-]{0,39}$/;
 // A path inside a repository: relative, no "..", no glob characters.
 const filePathPattern = /^(?!\/)(?!.*\/\/)(?!.*(?:^|\/)\.\.(?:\/|$))(?!.*(?:^|\/)\.(?:\/|$))[A-Za-z0-9_.\/-]+$/;
 export const isRepositoryPath = (path) => typeof path === 'string' && filePathPattern.test(path) && !path.endsWith('/');
-
-// ---- not the Directory's ----
-
-export const maxHomepageLength = 200;
-const homepageHost = /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
-const homepagePath = /^\/[A-Za-z0-9._~/-]*$/;
-
-// A problem with `value` as a manifest's `homepage`, or null. On top of publicHttpsProblem (so on top of the
-// Directory's rules): at most 200 characters; the host is dot-separated labels of lower-case ASCII letters,
-// digits and hyphen (no leading or trailing hyphen in a label), at least two labels, no port, no userinfo;
-// the path has only A-Z a-z 0-9 . _ ~ / and -, no percent escape, no `//`, no `.` or `..` segment. So the
-// URL is plain text that needs no escaping in an HTML attribute, a JSON string or a command line.
-export function homepageProblem(value) {
-  if (typeof value !== 'string') return 'must be a public https URL';
-  if (value.length > maxHomepageLength) return `must be at most ${maxHomepageLength} characters`;
-  const problem = publicHttpsProblem(value);
-  if (problem) return problem;
-  const [, authority, path] = /^https:\/\/([^/]*)(\/.*)$/.exec(value) ?? [];
-  if (authority === undefined) return 'must be https://<host>/<path>';
-  if (!homepageHost.test(authority)) return 'must have a host of lower-case ASCII letters, digits and hyphens in dot-separated labels (at least two, no port, no userinfo)';
-  if (!homepagePath.test(path)) return 'must have a path of only letters, digits and . _ ~ / - (no percent escape, quote, space or other character)';
-  if (path.split('/').some((segment, index, all) => segment === '.' || segment === '..' || (segment === '' && index > 0 && index < all.length - 1))) return 'must not have a . or .. or empty path segment';
-  return null;
-}
