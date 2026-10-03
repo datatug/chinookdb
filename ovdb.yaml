@@ -21,9 +21,10 @@ deployment:
   recordset_page: https://cloud.openvaultdb.com/ovdb/dbs/chinook/collections/{name}
 
 # The model is named by local files (below) or, when it lives in another repository, by `address`
-# with a pinned ?ref=<40 hex>. This repository has both: its files, and its own address in the
-# ModelSpec registry (github.com/modelspec-org/registry, record `chinook`). The address is
-# repository + module name; it has no ref because the files are in this same repository.
+# with a pinned ?ref=<40 hex> (that form is not read by the Directory yet). This repository has both:
+# its files, and the model's address in the ModelSpec registry (github.com/modelspec-org/registry;
+# its registration of `chinook` is in review there). The address is repository + module name; it has
+# no ref because the files are in this same repository.
 model:
   address: modelspec://github.com/datatug/chinookdb/chinook
   modelspec: model/chinook.modelspec.json

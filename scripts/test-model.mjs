@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cleanGitEnv } from './lib/git-env.mjs';
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { after, test } from 'node:test';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
@@ -36,10 +37,13 @@ const coreUrl = `meaning://${coreRepo}`;
 const coreRef = (id, pin = corePin) => `${coreUrl}/${id}?ref=${pin}`;
 
 // Where the network is not the point, a local git repository stands in for github.com.
+// Every process this file starts gets an environment without GIT_* variables (git sets GIT_DIR and
+// GIT_INDEX_FILE for a hook it runs from a linked worktree), and every git call names its repository with -C.
+const exec = (command, args, options = {}) => execFileSync(command, args, { ...options, env: cleanGitEnv() });
 const scratch = mkdtempSync(join(tmpdir(), 'model-meaning-'));
 after(() => rmSync(scratch, { recursive: true, force: true }));
 let scratchCount = 0;
-const gitIn = (dir, ...args) => execFileSync('git', ['-C', dir, ...args], { stdio: 'pipe' }).toString().trim();
+const gitIn = (dir, ...args) => exec('git', ['-C', dir, ...args], { stdio: 'pipe' }).toString().trim();
 function localOrigin(files) {
   const dir = join(scratch, `origin-${scratchCount++}`);
   mkdirSync(dir);
@@ -49,7 +53,7 @@ function localOrigin(files) {
   gitIn(dir, '-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'files');
   return { dir, url: `file://${dir}`, sha: gitIn(dir, 'rev-parse', 'HEAD') };
 }
-const plainRun = (command, args) => execFileSync(command, args, { stdio: 'pipe' }).toString();
+const plainRun = (command, args) => exec(command, args, { stdio: 'pipe' }).toString();
 // A resolver that reads the universal concepts' address from a local repository instead of github.com.
 const localResolver = (url, repo = coreRepo) => createResolver({ root, sources: { [repo]: { git: url } }, cacheDir: join(scratch, `cache-${scratchCount++}`) });
 const permanent = /(not our ref|couldn't find remote ref)/;
@@ -63,7 +67,7 @@ test('the ModelSpec JSON and the model checksums are generated from the current 
 test('only git-tracked files without a leading dot are published and checksummed', async () => {
   const work = mkdtempSync(join(tmpdir(), 'model-files-'));
   try {
-    const git = (...args) => execFileSync('git', ['-C', work, ...args], { stdio: 'pipe' });
+    const git = (...args) => exec('git', ['-C', work, ...args], { stdio: 'pipe' });
     git('init', '-q');
     mkdirSync(join(work, 'model', '.cache'), { recursive: true });
     for (const name of ['a.yaml', '.DS_Store', '.cache/x.json', 'untracked.yaml']) writeFileSync(join(work, 'model', name), name);
@@ -250,7 +254,7 @@ test('checkoutGit caches an immutable commit by its id, retries a failed fetch a
   const work = mkdtempSync(join(tmpdir(), 'meaning-git-'));
   try {
     const origin = join(work, 'origin');
-    const git = (...args) => execFileSync('git', ['-C', origin, ...args], { stdio: 'pipe' }).toString().trim();
+    const git = (...args) => exec('git', ['-C', origin, ...args], { stdio: 'pipe' }).toString().trim();
     mkdirSync(origin);
     git('init', '-q', '-b', 'main');
     writeFileSync(join(origin, 'a.meaning.yaml'), 'format: meaning/draft-1\n');
@@ -262,7 +266,7 @@ test('checkoutGit caches an immutable commit by its id, retries a failed fetch a
     const cacheDir = join(work, 'cache');
     const tempDir = join(work, 'tmp');
     mkdirSync(tempDir);
-    const run = (command, args) => { calls.push(args.join(' ')); return execFileSync(command, args, { stdio: 'pipe' }).toString(); };
+    const run = (command, args) => { calls.push(args.join(' ')); return exec(command, args, { stdio: 'pipe' }).toString(); };
     const fetches = () => calls.filter((call) => / fetch /.test(call)).length;
 
     const first = checkoutGit(url, sha, { cacheDir, run });
@@ -361,7 +365,7 @@ test('two processes filling one cache entry both get the verified directory', ()
     if (args.includes('checkout') && !raced) {
       raced = true;
       const work = args[1];
-      execFileSync('git', ['clone', '-q', work, kept], { stdio: 'pipe' });
+      exec('git', ['clone', '-q', work, kept], { stdio: 'pipe' });
     }
     return out;
   };
@@ -621,13 +625,24 @@ const manifestRepo = (() => {
   return dir;
 })();
 const manifestFiles = gitRepoFiles(manifestRepo);
+// A write or a reset may only ever touch a scratch repository this test created under the temp directory,
+// never the checkout and never any other repository.
+const assertScratch = (dir) => {
+  const inside = (parent, child) => !relative(realpathSync(parent), realpathSync(child)).startsWith('..');
+  assert.ok(inside(scratch, dir) && dir !== scratch, `${dir} is not a scratch repository under ${scratch}`);
+  assert.ok(inside(realpathSync(tmpdir()), dir), `${dir} is not under the temp directory`);
+  assert.ok(!inside(root, dir), `${dir} is inside the checkout`);
+  assert.equal(realpathSync(gitIn(dir, 'rev-parse', '--show-toplevel')), realpathSync(dir), `${dir} is not the top of its own repository`);
+};
 const manifestProblems = (changes = {}, options = { repository: manifestRepository }) => {
+  assertScratch(manifestRepo);
   for (const [path, text] of Object.entries(changes)) writeFileSync(join(manifestRepo, path), text);
   gitIn(manifestRepo, 'add', '--', ...Object.keys(changes));
   commitAs(manifestRepo, '-m', 'case');
   try {
     return checkOvdbManifest(manifestFiles, options).join('\n');
   } finally {
+    assertScratch(manifestRepo);
     gitIn(manifestRepo, 'reset', '-q', '--hard', 'HEAD~1');
   }
 };
@@ -670,14 +685,17 @@ test('a broken OVDB.md fails the manifest check', () => {
 test('every file the manifest names must be a regular file that git tracks at HEAD', () => {
   const naming = (field, path) => withManifest((m) => { const [a, b] = field.split('.'); m[a][b] = path; });
   assert.match(naming('meaning.file', 'model/missing.meaning.yaml'), /meaning.file names model\/missing.meaning.yaml, which must be a tracked regular file, but it is missing/);
-  assert.match(naming('model.hcl', 'model'), /model.hcl names model, which must be a tracked regular file, but it is directory/);
-  assert.match(naming('model.hcl', 'model/link.yaml'), /model.hcl names model\/link.yaml, .* it is symlink/);
-  assert.match(naming('model.hcl', 'untracked.json'), /untracked.json, .* it is untracked/);
-  assert.match(naming('model.hcl', 'ignored.json'), /ignored.json, .* it is ignored/);
+  assert.match(naming('model.hcl', 'model'), /model.hcl "model" must be a path ending in .modelspec.hcl/);
+  assert.match(naming('meaning.file', 'model'), /meaning.file names model, which must be a tracked regular file, but it is directory/);
+  assert.match(naming('meaning.file', 'model/link.yaml'), /meaning.file names model\/link.yaml, .* it is symlink/);
+  assert.match(naming('meaning.file', 'untracked.json'), /untracked.json, .* it is untracked/);
+  assert.match(naming('meaning.file', 'ignored.json'), /ignored.json, .* it is ignored/);
   assert.match(naming('model.hcl', '/etc/hosts'), /relative to the repository root \(no glob, no \.\., not absolute\)/);
   assert.match(naming('model.hcl', 'model/*.hcl'), /no glob/);
   assert.match(naming('model.modelspec', '../outside.json'), /no glob, no \.\./);
-  assert.match(naming('model.modelspec', 'model/chinook.meaning.yaml'), /is not a ModelSpec JSON file/);
+  assert.match(naming('model.modelspec', 'model/chinook.meaning.yaml'), /model.modelspec "model\/chinook.meaning.yaml" must be a path ending in .modelspec.json/);
+  assert.match(naming('model.hcl', 'model/chinook.modelspec.json'), /model.hcl "model\/chinook.modelspec.json" must be a path ending in .modelspec.hcl/);
+  assert.match(naming('model.hcl', 'OVDB.md'), /model.hcl "OVDB.md" must be a path ending in .modelspec.hcl/);
   // A path is relative to the repository root, not to the manifest.
   assert.match(naming('meaning.file', 'chinook.meaning.yaml'), /meaning.file names chinook.meaning.yaml, .* it is missing/);
   // The manifest files themselves are held to the same rule.
@@ -768,6 +786,7 @@ test('model.hcl is required with local model files, and the files are read from 
     assert.equal(checkOvdbManifest(manifestFiles, { repository: manifestRepository }).join('\n'), '');
     assert.equal(manifestFiles.read('ovdb.yaml').startsWith('# OpenVaultDB publisher manifest'), true);
   } finally {
+    assertScratch(manifestRepo);
     gitIn(manifestRepo, 'checkout', '--', 'ovdb.yaml');
   }
 });
@@ -776,7 +795,7 @@ test('git pathspec magic is a literal path, never a way to reach another file', 
   const naming = (path) => withManifest((m) => { m.model.hcl = path; });
   // `:/` would resolve to the repository root, `:(icase)` would match another case; neither may pass or throw.
   assert.match(naming(':/model/chinook.modelspec.hcl'), /model.hcl names :\/model\/chinook.modelspec.hcl, which must be a tracked regular file, but it is missing/);
-  assert.match(naming(':(icase)MODEL/CHINOOK.MODELSPEC.HCL'), /model.hcl names :\(icase\)MODEL\/CHINOOK.MODELSPEC.HCL, .* it is missing/);
+  assert.match(naming(':(icase)MODEL/chinook.modelspec.hcl'), /model.hcl names :\(icase\)MODEL\/chinook.modelspec.hcl, .* it is missing/);
   assert.match(naming(':(top)model/chinook.modelspec.hcl'), /it is missing/);
   assert.match(naming(':!model/chinook.modelspec.hcl'), /it is missing/);
   assert.match(naming('MODEL/chinook.modelspec.hcl'), /it is (missing|untracked)/, 'a different case is a different path');
@@ -821,4 +840,130 @@ test('model.address names the model in the registry: our own files and address, 
   assert.match(remote((m) => { m.recordsets = []; }), /recordsets must be a non-empty list/);
   assert.match(remote((m) => { m.model.hcl = 'model/chinook.modelspec.hcl'; }), /model.modelspec is required with local model files/);
   assert.match(withManifest((m) => { m.model.address = 5; }), /model.address must be modelspec:/);
+});
+
+test('the address grammar follows GitHub names and ModelSpec module names', () => {
+  const pin = 'b'.repeat(40);
+  // Address-only, so the exact-match rule for local files cannot hide a loose grammar.
+  const remote = (address) => withManifest((m) => {
+    delete m.model.modelspec;
+    delete m.model.hcl;
+    m.model.address = address;
+  });
+  assert.equal(remote(`modelspec://github.com/acme/chinook-hoster/chinook?ref=${pin}`), '');
+  assert.equal(remote(`modelspec://github.com/acme/my.repo_1-x/model_2?ref=${pin}`), '');
+  for (const bad of [
+    'chinook.Customer', 'chinook.', '.chinook', 'Chinook', '1chinook', 'chinook-x', 'chinook.x.y',
+  ]) {
+    assert.match(remote(`modelspec://github.com/datatug/chinookdb/${bad}?ref=${pin}`), /model.address must be modelspec:\/\/github.com\/<org>\/<repository>\/<module>/, `module ${bad}`);
+  }
+  for (const bad of ['..', '.', '---', '...', 'chinookdb.git', '.hidden', 'a.git', '']) {
+    assert.match(remote(`modelspec://github.com/datatug/${bad}/chinook?ref=${pin}`), /model.address must be modelspec:\/\/github.com\/<org>\/<repository>\/<module>/, `repository ${JSON.stringify(bad)}`);
+  }
+  for (const bad of ['..', '.', '-x', 'a.b', 'a_b', '']) {
+    assert.match(remote(`modelspec://github.com/${bad}/chinookdb/chinook?ref=${pin}`), /model.address must be modelspec:\/\/github.com\/<org>\/<repository>\/<module>/, `owner ${JSON.stringify(bad)}`);
+  }
+  // publisher.repository follows the same repository-name rule.
+  assert.match(withManifest((m) => { m.publisher.repository = 'https://github.com/datatug/..'; }), /publisher.repository must be https:\/\/github.com\/<owner>\/<repository>/);
+  assert.match(withManifest((m) => { m.publisher.repository = 'https://github.com/datatug/chinookdb.git'; }), /publisher.repository must be https:\/\/github.com\/<owner>\/<repository>/);
+});
+
+test('recordset names are checked even when the model is in another repository', () => {
+  const pin = 'c'.repeat(40);
+  const remote = (recordsets) => withManifest((m) => {
+    delete m.model.modelspec;
+    delete m.model.hcl;
+    m.model.address = `modelspec://github.com/acme/other/chinook?ref=${pin}`;
+    m.recordsets = recordsets;
+  });
+  assert.equal(remote(['Album', 'Artist', '_Hidden', 'Track2']), '');
+  assert.match(remote(['Album', 'Album']), /recordsets lists a name twice/);
+  for (const bad of ['../../admin', 'a?b#c', 'x y', '1Album', 'chinook.Album', 'a-b']) {
+    assert.match(remote(['Album', bad]), /recordsets names must look like ModelSpec entity names/, `name ${JSON.stringify(bad)}`);
+  }
+  // With local files the names are also compared with the model's entities.
+  assert.match(withManifest((m) => { m.recordsets[0] = 'a b'; }), /recordsets names must look like ModelSpec entity names/);
+});
+
+test('model.hcl is the meaning file\'s models: entry for the module, a .modelspec.hcl file', () => {
+  // Another tracked file with the right ending is still not the module's source.
+  const copy = readFileSync(join(manifestRepo, 'model/chinook.modelspec.hcl'), 'utf8');
+  assert.match(
+    manifestProblems({ 'model/other.modelspec.hcl': copy, 'ovdb.yaml': stringifyYaml({ ...manifestDoc(), model: { ...manifestDoc().model, hcl: 'model/other.modelspec.hcl' } }) }),
+    /model.hcl is model\/other.modelspec.hcl but the meaning file's models: entry for chinook is model\/chinook.modelspec.hcl/,
+  );
+  const meaningText = readFileSync(join(manifestRepo, 'model/chinook.meaning.yaml'), 'utf8');
+  assert.match(
+    manifestProblems({ 'model/chinook.meaning.yaml': meaningText.replace('  chinook: chinook.modelspec.hcl\n', '  other: chinook.modelspec.hcl\n') }),
+    /the meaning file model\/chinook.meaning.yaml has no models: entry for module chinook/,
+  );
+  assert.equal(manifestProblems(), '');
+});
+
+test('a file that is too large, a missing HEAD and a missing repository are reported as what they are', () => {
+  // Over 16 MB: reported once as too large, not as bad JSON or a missing module name.
+  const big = `{"module":{"name":"chinook"},"pad":"${'x'.repeat(17 * 1024 * 1024)}"}`;
+  const problems = manifestProblems({ 'model/chinook.modelspec.json': big });
+  assert.match(problems, /model\/chinook.modelspec.json is larger than 16 MB/);
+  assert.equal(problems.split('larger than 16 MB').length, 2, 'reported once');
+  assert.doesNotMatch(problems, /not a ModelSpec JSON file|declares no module.name/);
+  // A repository with no commit, and a directory that is not a repository.
+  const unborn = join(scratch, `unborn-${scratchCount++}`);
+  mkdirSync(unborn);
+  gitIn(unborn, 'init', '-q', '-b', 'main');
+  writeFileSync(join(unborn, 'OVDB.md'), read('OVDB.md'));
+  gitIn(unborn, 'add', 'OVDB.md');
+  const noCommit = checkOvdbManifest(gitRepoFiles(unborn)).join('\n');
+  assert.match(noCommit, /git could not read HEAD of .*unborn-\d+: .*Is it a git repository with a commit\?/);
+  assert.doesNotMatch(noCommit, /OVDB.md is missing/);
+  const plain = join(scratch, `plain-${scratchCount++}`);
+  mkdirSync(plain);
+  writeFileSync(join(plain, 'OVDB.md'), read('OVDB.md'));
+  const noRepo = checkOvdbManifest(gitRepoFiles(plain)).join('\n');
+  assert.match(noRepo, /git could not read HEAD of .*plain-\d+: /);
+  assert.doesNotMatch(noRepo, /OVDB.md is missing/);
+});
+
+test('git variables inherited from a hook never reach another repository', () => {
+  // git sets GIT_DIR and GIT_INDEX_FILE for a hook it runs from a linked worktree. Point them at a decoy
+  // repository and prove the manifest helpers neither read nor change it.
+  const decoy = join(scratch, `decoy-${scratchCount++}`);
+  mkdirSync(decoy);
+  gitIn(decoy, 'init', '-q', '-b', 'decoy');
+  writeFileSync(join(decoy, 'kept.txt'), 'kept');
+  gitIn(decoy, 'add', 'kept.txt');
+  commitAs(decoy, '-m', 'decoy commit');
+  writeFileSync(join(decoy, 'staged.txt'), 'staged');
+  gitIn(decoy, 'add', 'staged.txt');
+  const snapshot = () => ({
+    head: gitIn(decoy, 'rev-parse', 'HEAD'),
+    branch: gitIn(decoy, 'rev-parse', '--abbrev-ref', 'HEAD'),
+    commits: gitIn(decoy, 'rev-list', '--count', 'HEAD'),
+    staged: gitIn(decoy, 'diff', '--cached', '--name-only'),
+    index: readFileSync(join(decoy, '.git', 'index')).toString('hex'),
+    tree: readdirSync(decoy).sort().join(','),
+  });
+  const before = snapshot();
+  const saved = { GIT_DIR: process.env.GIT_DIR, GIT_INDEX_FILE: process.env.GIT_INDEX_FILE, GIT_WORK_TREE: process.env.GIT_WORK_TREE };
+  Object.assign(process.env, { GIT_DIR: join(decoy, '.git'), GIT_INDEX_FILE: join(decoy, '.git', 'index'), GIT_WORK_TREE: decoy });
+  try {
+    // The test's own helper (commit, check, reset) and the checker, with the decoy in the environment.
+    assert.equal(manifestProblems(), '');
+    assert.match(manifestProblems({ 'ovdb.yaml': 'format: [broken' }), /ovdb.yaml: is not valid YAML/);
+    assert.equal(manifestFiles.kind('ovdb.yaml'), 'file');
+    assert.equal(manifestFiles.kind('kept.txt'), 'missing', 'the decoy is not the repository being read');
+    assert.equal(gitIn(manifestRepo, 'rev-parse', '--show-toplevel'), realpathSync(manifestRepo));
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+  assert.deepEqual(snapshot(), before, 'the decoy repository is untouched');
+});
+
+test('the test helpers refuse to write outside a scratch repository', () => {
+  assert.throws(() => assertScratch(root), /is not a scratch repository|inside the checkout/);
+  assert.throws(() => assertScratch(tmpdir()), /not a scratch repository/);
+  assert.doesNotThrow(() => assertScratch(manifestRepo));
 });

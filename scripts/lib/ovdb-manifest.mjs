@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { join, posix } from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { cleanGitEnv } from './git-env.mjs';
 
 // Checks the OpenVaultDB publisher manifest: the root OVDB.md that opts the repository in and the
 // manifest files it lists.
@@ -13,12 +14,18 @@ import { parse as parseYaml } from 'yaml';
 // `files` supplies the repository: read(path) returns a file's text as HEAD holds it (not the working
 // tree), and kind(path) says what the path is at HEAD: 'file', 'directory', 'symlink', 'untracked',
 // 'ignored' or 'missing'. Both look at the same commit, so an uncommitted edit is never checked.
+// problem(), when present, says why the repository cannot be read at all (not a git repository, no
+// commit yet). read() throws an Error whose message says why a file cannot be read (for example, too large).
 // checkOvdbManifest returns a list of problems; empty means the manifest is good.
 //
 // A manifest names its ModelSpec model one of two ways. By local files: `model.modelspec` (the JSON)
 // and `model.hcl` (the source, which the Directory index reports as `model.path`), plus an optional
 // `model.address` that must be this repository's own address for the model, without a ref. Or by
-// `model.address` alone, pinned with `?ref=<40 hex>`, when the model lives in another repository.
+// `model.address` alone, pinned with `?ref=<40 hex>`, when the model lives in another repository. The
+// Directory does not read the address-only form yet; it still needs local model files.
+//
+// `model.hcl` is the source file of the model. The Directory index takes `model.path` from the meaning
+// file's `models:` entry for the module, and the manifest's `model.hcl` must be that same path.
 
 const manifestFormat = 'ovdb-manifest/draft-1';
 const globChars = /[*?[\]{}\\]/;
@@ -28,7 +35,14 @@ export const licenceIds = [
   'GPL-2.0-only', 'GPL-3.0-only', 'ISC', 'LGPL-3.0-only', 'MIT', 'MPL-2.0', 'ODC-By-1.0', 'ODbL-1.0', 'PDDL-1.0', 'Unlicense',
 ];
 // modelspec://github.com/<org>/<repo>/<module>, optionally pinned with ?ref=<40 hex>. Nothing else.
-const modelAddress = /^modelspec:\/\/github\.com\/([A-Za-z0-9][A-Za-z0-9-]*)\/([A-Za-z0-9._-]+)\/([A-Za-z0-9][A-Za-z0-9._-]*)(\?ref=[0-9a-f]{40})?$/;
+// org and repo follow GitHub's rules: a repository name is [A-Za-z0-9._-], has at least one letter or
+// digit, does not start with a dot and does not end in .git. A module name is a ModelSpec module name,
+// lower-case letters, digits and underscores, never with a dot: `<address>.<Entity>` is an entity reference.
+const repoName = '(?!\\.)(?![A-Za-z0-9._-]*\\.git(?:/|$))(?=[A-Za-z0-9._-]*[A-Za-z0-9])[A-Za-z0-9._-]+';
+const modelAddress = new RegExp(`^modelspec://github\\.com/([A-Za-z0-9][A-Za-z0-9-]*)/(${repoName})/([a-z][a-z0-9_]*)(\\?ref=[0-9a-f]{40})?$`);
+const githubRepoPath = new RegExp(`^https://github\\.com/([A-Za-z0-9][A-Za-z0-9-]*)/(${repoName})$`);
+const entityName = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const maxFileBytes = 16 * 1024 * 1024;
 const discoveryPath = '/.well-known/openvaultdb';
 
 // The keys a manifest may have. Anything else is refused, so a stray secret cannot ride along.
@@ -44,17 +58,35 @@ const allowedKeys = {
 
 // A repository on disk, read through git. kind() asks git what HEAD holds at the path.
 export function gitRepoFiles(root) {
+  // cleanGitEnv drops every inherited GIT_* variable; -C names the repository.
   // --literal-pathspecs: a path is a path, never pathspec magic such as `:/` or `:(icase)`.
-  const run = (flags, args) => execFileSync('git', [...flags, '-C', root, ...args], { stdio: 'pipe' }).toString();
+  const run = (flags, args, options = {}) =>
+    execFileSync('git', [...flags, '-C', root, ...args], { stdio: 'pipe', env: cleanGitEnv(), maxBuffer: maxFileBytes, ...options }).toString();
   const git = (...args) => run(['--literal-pathspecs'], args);
   return {
-    read: (path) => git('cat-file', 'blob', `HEAD:${path}`),
+    problem() {
+      try {
+        run([], ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
+        return '';
+      } catch (error) {
+        const reason = String(error.stderr ?? '').trim().split('\n').at(-1) || error.message.split('\n')[0];
+        return `git could not read HEAD of ${root}: ${reason}. Is it a git repository with a commit?`;
+      }
+    },
+    read(path) {
+      try {
+        return git('cat-file', 'blob', `HEAD:${path}`);
+      } catch (error) {
+        if (error.code === 'ENOBUFS') throw new Error(`${path} is larger than ${maxFileBytes / 1024 / 1024} MB, which is more than a manifest file may be`);
+        throw new Error(`${path} cannot be read at HEAD: ${String(error.stderr ?? '').trim().split('\n').at(-1) || error.message}`);
+      }
+    },
     kind(path) {
       let entry;
       try {
         entry = git('ls-tree', '-z', 'HEAD', '--', path).split('\0')[0];
       } catch {
-        return 'missing'; // git refused the path outright
+        return 'missing'; // git refused the path outright; a repository that cannot be read at all is reported by problem()
       }
       // `<mode> <type> <sha>\t<path>`; only an entry for exactly the requested path counts.
       const tab = entry.indexOf('\t');
@@ -115,15 +147,23 @@ function urlProblem(value) {
 
 const githubOwner = (value) => /^https:\/\/github\.com\/([A-Za-z0-9][A-Za-z0-9-]*)$/.exec(value)?.[1];
 const githubRepo = (value) => {
-  const match = /^https:\/\/github\.com\/([A-Za-z0-9][A-Za-z0-9-]*)\/([A-Za-z0-9._-]+)$/.exec(value);
-  return match && !match[2].endsWith('.git') ? { owner: match[1], repo: match[2] } : undefined;
+  const match = githubRepoPath.exec(value);
+  return match ? { owner: match[1], repo: match[2] } : undefined;
 };
 
 export function checkOvdbManifest(files, { repository } = {}) {
   const problems = [];
+  const unreadable = files.problem?.();
+  if (unreadable) return [unreadable];
   const kind = files.kind('OVDB.md');
   if (kind !== 'file') return [kind === 'missing' ? 'OVDB.md is missing from the repository root' : `OVDB.md must be a tracked regular file, but it is ${kind}`];
-  const { data, error } = parseFrontmatter(files.read('OVDB.md'));
+  let text;
+  try {
+    text = files.read('OVDB.md');
+  } catch (error) {
+    return [`OVDB.md: ${error.message}`];
+  }
+  const { data, error } = parseFrontmatter(text);
   if (error) return [`OVDB.md ${error}`];
   const extra = Object.keys(data).filter((key) => !['ovdb', 'publish'].includes(key));
   if (extra.length) problems.push(`OVDB.md: unknown frontmatter keys: ${extra.join(', ')}`);
@@ -165,7 +205,7 @@ export function checkManifest(path, files, { repository } = {}) {
   try {
     manifest = parseYaml(files.read(path));
   } catch (error) {
-    return [`${path}: is not valid YAML: ${error.message}`];
+    return [error instanceof Error && error.name === 'YAMLParseError' ? `${path}: is not valid YAML: ${error.message}` : `${path}: ${error.message}`];
   }
   if (!isObject(manifest)) return [`${path}: is not a mapping`];
 
@@ -235,6 +275,20 @@ export function checkManifest(path, files, { repository } = {}) {
     else if (!licenceIds.includes(value)) bad(`licences.${field} must be a known SPDX licence id (${licenceIds.join(', ')}), got ${JSON.stringify(value)}`);
   }
 
+  // Each file is read once; a file that cannot be read is reported once, and reads as undefined.
+  const loaded = new Map();
+  const load = (path) => {
+    if (!loaded.has(path)) {
+      try {
+        loaded.set(path, files.read(path));
+      } catch (error) {
+        bad(error.message);
+        loaded.set(path, undefined);
+      }
+    }
+    return loaded.get(path);
+  };
+
   // The model is named by local files or by an address in another repository (see the top of this file).
   const model = manifest.model;
   const address = model?.address;
@@ -248,8 +302,9 @@ export function checkManifest(path, files, { repository } = {}) {
 
   // Every file the manifest names is a tracked regular file; they are all read from the repository root.
   const named = { 'model.modelspec': model?.modelspec, 'model.hcl': model?.hcl, 'meaning.file': manifest.meaning?.file };
+  const suffixes = { 'model.modelspec': '.modelspec.json', 'model.hcl': '.modelspec.hcl' };
   if (local && !isText(named['model.modelspec'])) bad('model.modelspec is required with local model files');
-  if (local && !isText(named['model.hcl'])) bad('model.hcl is required with local model files: the Directory index takes model.path from it');
+  if (local && !isText(named['model.hcl'])) bad("model.hcl is required with local model files: it is the model's source file, and must be the path in the meaning file's models: entry");
   if (!isText(named['meaning.file'])) bad('meaning.file is required');
   const readable = {};
   for (const [label, value] of Object.entries(named)) {
@@ -258,29 +313,39 @@ export function checkManifest(path, files, { repository } = {}) {
       bad(`${label} ${JSON.stringify(value)} must be a file path relative to the repository root (no glob, no .., not absolute)`);
       continue;
     }
+    if (suffixes[label] && !value.endsWith(suffixes[label])) {
+      bad(`${label} ${JSON.stringify(value)} must be a path ending in ${suffixes[label]}`);
+      continue;
+    }
     const fileKind = files.kind(value);
     if (fileKind !== 'file') bad(`${label} names ${value}, which must be a tracked regular file, but it is ${fileKind}`);
     else readable[label] = value;
   }
 
+  // The module the model file declares, and its entities.
+  let modelJson;
+  if (readable['model.modelspec']) {
+    const text = load(readable['model.modelspec']);
+    if (text !== undefined) {
+      try {
+        modelJson = JSON.parse(text);
+      } catch (error) {
+        bad(`${readable['model.modelspec']} is not a ModelSpec JSON file: ${error.message}`);
+      }
+    }
+  }
+  const moduleName = modelJson?.module?.name;
+
   // With local files the address is this repository's own, for the module the model file declares, and
   // carries no ref (the model is in the commit being read). Without them it must be pinned (above).
   if (local && addressParts) {
     if (addressParts[4]) bad('model.address must not carry ?ref= when the model files are in this repository');
-    let moduleName;
-    if (readable['model.modelspec']) {
-      try {
-        moduleName = JSON.parse(files.read(readable['model.modelspec'])).module?.name;
-      } catch {
-        // reported below, with the recordsets
-      }
-    }
     if (repoParts && isText(moduleName)) {
       const expected = `modelspec://github.com/${repoParts.owner}/${repoParts.repo}/${moduleName}`;
       if (addressParts[0].replace(addressParts[4] ?? '', '') !== expected) {
         bad(`model.address must be ${expected}, this repository plus the module name in ${readable['model.modelspec']}`);
       }
-    } else if (readable['model.modelspec'] && repoParts) {
+    } else if (modelJson && repoParts) {
       bad(`${readable['model.modelspec']} declares no module.name, so model.address cannot be checked`);
     }
   }
@@ -289,15 +354,31 @@ export function checkManifest(path, files, { repository } = {}) {
   const graph = manifest.meaning?.graph;
   need(graph, 'id', 'meaning.graph.id');
   need(graph, 'address', 'meaning.graph.address');
-  if (readable['meaning.file'] && isText(graph?.id)) {
-    try {
-      const meaning = parseYaml(files.read(readable['meaning.file']));
-      if (meaning?.id !== graph.id) bad(`meaning.graph.id is ${graph.id} but the meaning file's id is ${JSON.stringify(meaning?.id)}`);
+  if (readable['meaning.file']) {
+    const text = load(readable['meaning.file']);
+    let meaning;
+    if (text !== undefined) {
+      try {
+        meaning = parseYaml(text);
+      } catch (error) {
+        bad(`${readable['meaning.file']} is not valid YAML: ${error.message}`);
+      }
+    }
+    if (meaning !== undefined) {
+      if (isText(graph?.id) && meaning?.id !== graph.id) bad(`meaning.graph.id is ${graph.id} but the meaning file's id is ${JSON.stringify(meaning?.id)}`);
       if (isText(manifest.licences?.meaning) && meaning?.license !== manifest.licences.meaning) {
         bad(`licences.meaning is ${manifest.licences.meaning} but the meaning file says ${meaning?.license}`);
       }
-    } catch (error) {
-      bad(`${readable['meaning.file']} is not valid YAML: ${error.message}`);
+      // model.hcl is the meaning file's models: entry for the module (relative to the meaning file); the
+      // Directory takes model.path from that entry and compares it with the manifest.
+      if (readable['model.hcl'] && isText(moduleName)) {
+        const entry = isObject(meaning?.models) ? meaning.models[moduleName] : undefined;
+        if (!isText(entry)) bad(`the meaning file ${readable['meaning.file']} has no models: entry for module ${moduleName}`);
+        else {
+          const resolved = posix.join(posix.dirname(readable['meaning.file']), entry);
+          if (readable['model.hcl'] !== resolved) bad(`model.hcl is ${readable['model.hcl']} but the meaning file's models: entry for ${moduleName} is ${resolved}`);
+        }
+      }
     }
   }
   if (isText(graph?.address) && repoParts) {
@@ -309,18 +390,17 @@ export function checkManifest(path, files, { repository } = {}) {
   const recordsets = manifest.recordsets;
   if (!Array.isArray(recordsets) || recordsets.length === 0 || !recordsets.every(isText)) {
     bad('recordsets must be a non-empty list of names');
-  } else if (!local) {
-    // The model is in another repository; its entities are checked when it is registered.
-  } else if (readable['model.modelspec']) {
-    let entityNames;
-    try {
-      entityNames = Object.keys(JSON.parse(files.read(readable['model.modelspec'])).entities ?? {});
-    } catch (error) {
-      bad(`${readable['model.modelspec']} is not a ModelSpec JSON file: ${error.message}`);
-    }
-    if (entityNames) {
-      const listed = new Set(recordsets);
-      if (listed.size !== recordsets.length) bad('recordsets lists a name twice');
+  } else {
+    const listed = new Set(recordsets);
+    if (listed.size !== recordsets.length) bad('recordsets lists a name twice');
+    const misshapen = recordsets.filter((name) => !entityName.test(name));
+    if (misshapen.length) bad(`recordsets names must look like ModelSpec entity names (letters, digits, underscore): ${misshapen.map((name) => JSON.stringify(name)).join(', ')}`);
+    if (!local) {
+      // The model is in another repository, so its entities cannot be read here. Whoever reads an
+      // address-only manifest (the Directory, which does not yet) must compare these names with the
+      // entities of the model at the pinned ref.
+    } else if (modelJson) {
+      const entityNames = Object.keys(modelJson.entities ?? {});
       const missing = entityNames.filter((name) => !listed.has(name));
       const extra = recordsets.filter((name) => !entityNames.includes(name));
       if (missing.length) bad(`recordsets lacks ModelSpec entities: ${missing.join(', ')}`);

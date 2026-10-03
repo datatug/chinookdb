@@ -10,6 +10,7 @@
 // to the entity of its target concept); and values must cover the data they
 // describe.
 import { execFileSync } from 'node:child_process';
+import { cleanGitEnv } from './git-env.mjs';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -107,7 +108,7 @@ const commit = /^[0-9a-f]{40}$/;
 // Errors that another attempt cannot fix (the ref or repository is not there).
 const permanentFailure = /couldn't find remote ref|not our ref|invalid refspec|not found|does not appear to be a git repository|could not read from remote|authentication failed/i;
 const gitFailure = (error) => String(error.stderr ?? error.message).trim().split('\n').filter(Boolean).pop() ?? 'git failed';
-const defaultRun = (command, args) => execFileSync(command, args, { stdio: 'pipe', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }).toString();
+const defaultRun = (command, args) => execFileSync(command, args, { stdio: 'pipe', env: { ...cleanGitEnv(), GIT_TERMINAL_PROMPT: '0' } }).toString();
 const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 // Fetches `ref` of the git repository at `url` and returns { dir, release }.

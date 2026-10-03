@@ -16,8 +16,9 @@ publisher and the licences.
 
 A manifest names its ModelSpec model in one of two ways: by local files
 (`model.modelspec` and `model.hcl`), or, when the model lives in another
-repository, by `model.address` pinned with `?ref=<40 hex>`. This repository
-carries both: its own files and its own address,
+repository, by `model.address` pinned with `?ref=<40 hex>` (the Directory does
+not read that form yet; it still needs local model files). This repository
+carries both: its own files and the model's address,
 `modelspec://github.com/datatug/chinookdb/chinook`, with no ref because the
 files are in the same repository. The manifest format is a draft
 (`ovdb-manifest/draft-1`).
