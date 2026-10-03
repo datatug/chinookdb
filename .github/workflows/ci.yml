@@ -26,6 +26,15 @@ jobs:
       - run: pnpm build
       - run: pnpm validate
       - run: pnpm test:data
+      # The universal concepts and the schema come from github.com/meaninggraph/core at the commit
+      # that model/chinook.meaning.yaml pins. A commit is immutable, so the checkout is cached
+      # under its id (the key changes with the pin) and verified before use; when the cache is
+      # empty the test fetches the commit, retrying on network errors.
+      - name: Cache the pinned meaninggraph/core checkout
+        uses: actions/cache@v4
+        with:
+          path: .cache/meaning-sources
+          key: meaning-sources-${{ hashFiles('model/*.meaning.yaml') }}
       - run: pnpm test:model
       - name: Generated model files are committed
         run: |

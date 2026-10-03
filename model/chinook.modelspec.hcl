@@ -1,3 +1,8 @@
+# Licence: MIT (https://github.com/datatug/chinookdb/blob/main/LICENSE).
+# The model restates the schema of the Chinook Database, Copyright (c) 2008-2024
+# Luis Rocha, MIT (https://github.com/lerocha/chinook-database/blob/master/LICENSE.md),
+# so that notice applies to it too. The meaning file chinook.meaning.yaml is CC0-1.0.
+#
 # Chinook sample database: storage-neutral data model (ModelSpec 1.0-draft).
 #
 # Module short name: chinook (references use modelspec:///chinook.<Entity>).

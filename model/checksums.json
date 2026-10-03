@@ -7,56 +7,16 @@
   },
   "files": {
     "chinook.meaning.yaml": {
-      "sha256": "df0533f6040c1799906c5a26c9b92e01b020872dd790ecfa7b1ef655e3656ee4",
-      "bytes": 15284
+      "sha256": "c22dae7a20127b9e65b36cae05d5dd94dcbd282a16405255bba92aee0b101d83",
+      "bytes": 15818
     },
     "chinook.modelspec.hcl": {
-      "sha256": "46d1af4aebccace95255fec90c35cc428668b44bd01cff9013f59f092c5a61d0",
-      "bytes": 7263
+      "sha256": "9396d935b441e68dfa5bcdae89234fa787b71d0c8689a2549dcaf57fb0c6c390",
+      "bytes": 7593
     },
     "chinook.modelspec.json": {
       "sha256": "f91130fd2185458671231d582270a9cea65243cd3f882c4a6db27731773231a1",
       "bytes": 6856
-    },
-    "vendor/README.md": {
-      "sha256": "4d9660239631c6e672ad8785e51c1aeed6847b024bfd27bceeed03d7ed5dba2a",
-      "bytes": 1041
-    },
-    "vendor/meaninggraph-core/LICENSE": {
-      "sha256": "a2010f343487d3f7618affe54f789f5487602331c0a8d03f49e9a7c547cf0499",
-      "bytes": 7048
-    },
-    "vendor/meaninggraph-core/README.md": {
-      "sha256": "93d99b54c14c6844bad2f5e60d430aab4f27f8ba99a91291fd5a2f414b248b90",
-      "bytes": 1594
-    },
-    "vendor/meaninggraph-core/assets.meaning.yaml": {
-      "sha256": "2914d5402d75803f11ecf2849754ba4006ea14a8eb3a92f6d0c7cf44f0c0cba7",
-      "bytes": 1748
-    },
-    "vendor/meaninggraph-core/calendar.meaning.yaml": {
-      "sha256": "6fe064accc0f7d79b4459dd104d2503894f1bd7392f90a7b902188e218d3af9c",
-      "bytes": 607
-    },
-    "vendor/meaninggraph-core/commerce.meaning.yaml": {
-      "sha256": "1f0fa7b4a9e4c888d96d97b4b821fdf3b0ab4cca074dffd4b1509f190e508ff3",
-      "bytes": 3148
-    },
-    "vendor/meaninggraph-core/geo.meaning.yaml": {
-      "sha256": "a20660b8a8b9b42e8e308ce0eccf653c7d04fa16ee1318f44e3203268ab1927a",
-      "bytes": 5705
-    },
-    "vendor/meaninggraph-core/identity.meaning.yaml": {
-      "sha256": "b794d048e0be3fdb3075752a2ccff9c250a07832724e1a66475db6125007e090",
-      "bytes": 1306
-    },
-    "vendor/meaninggraph-core/meaning.schema.json": {
-      "sha256": "19294c66f5ad6b7e2b0c986a8f3dd7ee2ca9bae07570abdbf47d94602580037a",
-      "bytes": 12161
-    },
-    "vendor/meaninggraph-core/statistics.meaning.yaml": {
-      "sha256": "14eac7a2f5bb273e949d8159c2ef2370dac9b74e552f536021d3414814548dcd",
-      "bytes": 1214
     }
   }
 }
