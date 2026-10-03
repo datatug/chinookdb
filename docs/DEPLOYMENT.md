@@ -1,6 +1,6 @@
 # Deployment
 
-chinookdb.com deploys itself: `.github/workflows/deploy.yml` checks, builds and publishes the Worker, so nobody runs `wrangler deploy` by hand. (The "Deployment" section of the README predates this workflow and says the repository workflow does not publish the Worker; this page is current.)
+chinookdb.com deploys itself: `.github/workflows/deploy.yml` checks, builds and publishes the Worker, so nobody runs `wrangler deploy` by hand.
 
 | Trigger | What runs |
 |---|---|
@@ -10,7 +10,7 @@ chinookdb.com deploys itself: `.github/workflows/deploy.yml` checks, builds and 
 
 There is no scheduled run: chinookdb.com is built from this repository alone, with no external index, so a deploy is due exactly when `main` changes.
 
-Runs are serialised (one concurrency group). `ci.yml` keeps running beside the deploy workflow; the deploy workflow repeats its checks (`pnpm build`, `validate`, `test:data`, `test:model`, the check that `model/` is committed, `lint:modelspec`, `check:drift`, `test:worker`) so that a deploy waits for them. `scripts/test-deploy.mjs` fails when `ci.yml` runs a `pnpm` command that `deploy.yml` does not, so a check added to one is added to the other.
+Runs are serialised (one concurrency group). `ci.yml` keeps running beside the deploy workflow; the deploy workflow repeats its checks (`pnpm build`, `validate`, `test:data`, `test:model`, `check:ovdb`, the check that `model/` is committed, `lint:modelspec`, `check:drift`, `test:worker`) so that a deploy waits for them. `scripts/test-deploy.mjs` fails when `ci.yml` runs a `pnpm` command that `deploy.yml` does not, so a check added to one is added to the other.
 
 **The build marker.** After the checks, `scripts/write-build-info.mjs` writes `dist/build-info.json` (`{"format": "chinookdb-build/1", "commit": "<40-digit commit>"}`, the commit from `BUILD_COMMIT`, set by the workflow), served at `https://chinookdb.com/build-info.json`. After the deploy, `scripts/smoke-live.mjs` fetches the live marker again, retrying for about a minute while the new version spreads, and fails unless it records the commit just deployed; it also checks that `/` and `/downloads/` answer 200.
 

@@ -152,11 +152,28 @@ excluded) unchanged at `/model/`, with a summary page at [/model/](/model/);
 
 The site is a Cloudflare Worker using current Workers Static Assets. The
 `wrangler.jsonc` configuration targets the `chinookdb` Worker and the
-`chinookdb.com` custom domain. The repository workflow validates pushes and
-pull requests, but does not publish the Worker. After a validated change lands
-on `main`, deploy it from the synced main checkout with `pnpm build` followed
-by `pnpm exec wrangler deploy`, then verify the public site and the deployed
-Worker version with `pnpm exec wrangler deployments list --name chinookdb --json`.
+`chinookdb.com` custom domain.
+
+It deploys itself: `.github/workflows/deploy.yml` runs the checks of `ci.yml`,
+builds, and runs `pnpm exec wrangler deploy` on every push to `main` and on a
+manual run from `main` (Actions, "Deploy"). A pull request only runs the checks
+and the build; nothing deploys from a pull request or a fork. There is no
+scheduled run: this site is built from this repository alone, so a deploy is due
+exactly when `main` changes. Before deploying, the workflow writes
+`dist/build-info.json` (the commit), served at `/build-info.json`; after the
+deploy it fetches that file from the live site and fails unless it names the
+commit just deployed.
+
+The deploy needs the `CLOUDFLARE_API_TOKEN` secret and the
+`CLOUDFLARE_ACCOUNT_ID` variable. When either is missing the workflow still runs
+the checks and the build, skips the deploy and the smoke check with a notice, and
+ends green.
+
+In an emergency, deploy by hand from the synced main checkout with `pnpm build`
+followed by `pnpm exec wrangler deploy`, then verify the public site and the
+deployed Worker version with
+`pnpm exec wrangler deployments list --name chinookdb --json`. See
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the details.
 
 Data responses are served by the Worker with explicit content types, public
 cache headers, and permissive read-only CORS. Missing `/data/` files return a

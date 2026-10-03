@@ -72,6 +72,8 @@ jobs:
           path: .cache/meaning-sources
           key: meaning-sources-${{ hashFiles('model/*.meaning.yaml') }}
       - run: pnpm test:model
+      - name: OVDB manifest (offline)
+        run: pnpm check:ovdb
       - name: Generated model files are committed
         run: |
           if [ -n "$(git status --porcelain -- model/)" ]; then
