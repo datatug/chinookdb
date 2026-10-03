@@ -1,5 +1,6 @@
 const cloudOrigin = 'https://cloud.openvaultdb.com';
-const contentTypes: Record<string, string> = { '.sqlite': 'application/vnd.sqlite3', '.sql': 'application/sql', '.yaml': 'application/yaml; charset=utf-8', '.yml': 'application/yaml; charset=utf-8', '.csv': 'text/csv; charset=utf-8', '.json': 'application/json; charset=utf-8' };
+// HCL has no registered media type; text/plain lets browsers show it.
+const contentTypes: Record<string, string> = { '.sqlite': 'application/vnd.sqlite3', '.sql': 'application/sql', '.yaml': 'application/yaml; charset=utf-8', '.yml': 'application/yaml; charset=utf-8', '.csv': 'text/csv; charset=utf-8', '.json': 'application/json; charset=utf-8', '.hcl': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8' };
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -35,7 +36,9 @@ function legacyOvdbRedirect(request: Request, url: URL): Response {
 
 async function assetResponse(request: Request, env: Env, url: URL): Promise<Response> {
   const embedScript = url.pathname === '/embed/datatug.js';
-  if (!embedScript && url.pathname !== '/data' && !url.pathname.startsWith('/data/')) return env.ASSETS.fetch(request);
+  // Model files (/model/<file>.<ext>) are data like /data/; the /model/ page is not.
+  const modelFile = url.pathname.startsWith('/model/') && /\.[a-z]+$/i.test(url.pathname);
+  if (!embedScript && !modelFile && url.pathname !== '/data' && !url.pathname.startsWith('/data/')) return env.ASSETS.fetch(request);
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders() });
   if (!['GET', 'HEAD'].includes(request.method)) return new Response('Method Not Allowed', { status: 405, headers: corsHeaders() });
   const asset = await env.ASSETS.fetch(request);

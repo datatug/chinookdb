@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chinookdb.com/model/meaning.schema.json",
+  "title": "Meaning file, draft 1",
+  "description": "A meaning file says what the data in a dataset means: concepts with labels per language, synonyms, a description, and bindings to ModelSpec entities and properties. Draft format: it may change before it is approved. Concept references are either a bare concept id (same repository) or meaning://{host}/{org}/{repo}/{concept-id}, optionally pinned with ?ref=<git-ref>.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "id", "name", "concepts"],
+  "properties": {
+    "format": {
+      "const": "meaning/draft-1",
+      "description": "Format identifier and version. Every meaning file carries it."
+    },
+    "id": { "$ref": "#/$defs/id", "description": "Id of this file within its repository (for example a domain such as geo or a dataset such as chinook)." },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string", "minLength": 1 },
+    "license": { "type": "string", "description": "SPDX licence identifier of this file's content." },
+    "models": {
+      "type": "object",
+      "description": "ModelSpec modules that bindings refer to: module short name -> path of its source, relative to this file.",
+      "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9_]*$" },
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "sources": {
+      "type": "array",
+      "description": "External datasets that external concepts come from.",
+      "items": { "$ref": "#/$defs/source" }
+    },
+    "concepts": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/concept" }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,79}$",
+      "description": "Lowercase letters, digits and hyphens, at most 80 characters."
+    },
+    "language": {
+      "type": "string",
+      "pattern": "^[a-z]{2,3}(-[A-Z]{2})?$",
+      "description": "BCP 47 language tag, language and optional region only (en, ru, pt-BR)."
+    },
+    "labels": {
+      "type": "object",
+      "required": ["en"],
+      "propertyNames": { "$ref": "#/$defs/language" },
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "words": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/language" },
+      "additionalProperties": {
+        "type": "array",
+        "minItems": 1,
+        "uniqueItems": true,
+        "items": { "type": "string", "minLength": 1 }
+      }
+    },
+    "conceptRef": {
+      "type": "string",
+      "description": "A bare concept id in the same repository, or meaning://{host}/{org}/{repo}/{concept-id}[?ref=<git-ref>].",
+      "pattern": "^([a-z0-9][a-z0-9-]{0,79}|meaning://[A-Za-z0-9.-]+(/[A-Za-z0-9._-]+)+/[a-z0-9][a-z0-9-]{0,79}(\\?ref=[A-Za-z0-9._/-]+)?)$"
+    },
+    "modelRef": {
+      "type": "string",
+      "description": "A ModelSpec entity: modelspec:///{module}.{Entity} (same repository) or modelspec://{host}/{org}/{repo}/{module}.{Entity}, optionally with ?ref=<git-ref>.",
+      "pattern": "^modelspec://([A-Za-z0-9.-]+(/[A-Za-z0-9._-]+)+)?/[A-Za-z][A-Za-z0-9_]*\\.[A-Za-z][A-Za-z0-9_]*(\\?ref=[A-Za-z0-9._/-]+)?$"
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model"],
+      "properties": {
+        "model": { "$ref": "#/$defs/modelRef" },
+        "property": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "A property of that entity. Kept separate from the reference because modelspec:// fragments address enum values only."
+        },
+        "note": { "type": "string", "minLength": 1 }
+      }
+    },
+    "value": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "labels"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "labels": { "$ref": "#/$defs/labels" },
+        "aliases": { "$ref": "#/$defs/words" },
+        "codes": {
+          "type": "object",
+          "description": "Codes from external code lists, such as ISO 3166-1 alpha-2.",
+          "propertyNames": { "pattern": "^[a-z][a-z0-9-]*$" },
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "measure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["formula"],
+      "properties": {
+        "formula": { "type": "string", "minLength": 1, "description": "How the measure is computed, in words. Not an expression language." },
+        "aggregation": { "enum": ["sum", "count", "average", "min", "max", "none"] },
+        "inputs": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/conceptRef" } },
+        "dimensions": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/conceptRef" } },
+        "scale": { "type": "number", "exclusiveMinimum": 0 },
+        "query": { "type": "string", "format": "uri", "description": "The saved query that computes this measure, when one exists." }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "provider", "dataset"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "provider": { "type": "string", "minLength": 1 },
+        "dataset": { "type": "string", "minLength": 1, "description": "The provider's own id for the dataset or indicator." },
+        "title": { "type": "string", "minLength": 1 },
+        "year": { "type": "integer", "minimum": 1000, "maximum": 9999 },
+        "license": { "type": "string", "minLength": 1, "description": "SPDX licence identifier of the source data." },
+        "url": { "type": "string", "format": "uri" },
+        "note": { "type": "string", "minLength": 1 }
+      }
+    },
+    "concept": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "labels"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["entity", "attribute", "measure", "dimension", "external"] },
+        "of": { "$ref": "#/$defs/conceptRef", "description": "The entity concept that this attribute, dimension or measure belongs to." },
+        "extends": { "$ref": "#/$defs/conceptRef", "description": "The concept this one specialises or reuses. It inherits the parent's synonyms, values, and description and unit when it has none of its own." },
+        "labels": { "$ref": "#/$defs/labels" },
+        "synonyms": { "$ref": "#/$defs/words" },
+        "description": { "type": "string", "minLength": 1 },
+        "unit": { "type": "string", "minLength": 1, "description": "Unit of the values, in words; ISO 4217 codes for currency amounts (USD)." },
+        "values": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/value" } },
+        "measure": { "$ref": "#/$defs/measure" },
+        "source": { "$ref": "#/$defs/id", "description": "Id of an entry in sources; external concepts only." },
+        "bindings": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/binding" } }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "measure" } } },
+          "then": { "required": ["measure"] },
+          "else": { "not": { "required": ["measure"] } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "external" } } },
+          "then": { "required": ["source"] },
+          "else": { "not": { "required": ["source"] } }
+        }
+      ]
+    }
+  }
+}

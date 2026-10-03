@@ -1,0 +1,36 @@
+format: meaning/draft-1
+id: identity
+name: People and organisations
+description: People, and the roles they hold in an organisation.
+concepts:
+  - id: person
+    kind: entity
+    labels:
+      en: Person
+      ru: Человек
+    synonyms:
+      en: [individual, people, human]
+      ru: [лицо, люди]
+    description: A human being.
+
+  - id: employee
+    kind: entity
+    extends: person
+    labels:
+      en: Employee
+      ru: Сотрудник
+    synonyms:
+      en: [staff member, worker, member of staff, colleague]
+      ru: [работник, персонал]
+    description: A person employed by an organisation.
+
+  - id: manager
+    kind: attribute
+    of: employee
+    labels:
+      en: Manager
+      ru: Руководитель
+    synonyms:
+      en: [boss, reports to, line manager, supervisor]
+      ru: [начальник, менеджер]
+    description: The employee that another employee reports to.

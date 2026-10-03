@@ -1,0 +1,130 @@
+format: meaning/draft-1
+id: commerce
+name: Commerce
+description: >-
+  Buying and selling: customers, invoices, money amounts and revenue.
+concepts:
+  - id: currency
+    kind: entity
+    labels:
+      en: Currency
+      ru: Валюта
+    synonyms:
+      en: [money, currency code]
+    description: >-
+      A currency with an ISO 4217 code. Values are keyed by the lowercase
+      alphabetic code. Starter content: three currencies.
+    values:
+      - id: usd
+        labels: {en: US dollar, ru: Доллар США}
+        aliases:
+          en: [USD, dollar, dollars, $]
+          ru: [доллар, доллары]
+        codes: {alpha: USD, numeric: "840"}
+      - id: eur
+        labels: {en: Euro, ru: Евро}
+        aliases:
+          en: [EUR, euros, €]
+        codes: {alpha: EUR, numeric: "978"}
+      - id: gbp
+        labels: {en: Pound sterling, ru: Фунт стерлингов}
+        aliases:
+          en: [GBP, pound, pounds, £]
+          ru: [фунт, фунты]
+        codes: {alpha: GBP, numeric: "826"}
+
+  - id: money-amount
+    kind: attribute
+    labels:
+      en: Money amount
+      ru: Сумма
+    synonyms:
+      en: [amount, price, cost, value]
+    description: >-
+      An amount of money. It is only meaningful together with its currency;
+      a dataset that does not store the currency must say which one applies.
+
+  - id: customer
+    kind: entity
+    labels:
+      en: Customer
+      ru: Клиент
+    synonyms:
+      en: [buyer, client, purchaser, shopper]
+      ru: [покупатель, заказчик]
+    description: A person or organisation that buys goods or services.
+
+  - id: invoice
+    kind: entity
+    labels:
+      en: Invoice
+      ru: Счёт
+    synonyms:
+      en: [bill, sale, order, purchase, receipt]
+      ru: [счёт-фактура, покупка, заказ]
+    description: >-
+      A document that records one sale to a customer: what was sold, when,
+      where it was billed, and the amount charged.
+
+  - id: invoice-line
+    kind: entity
+    of: invoice
+    labels:
+      en: Invoice line
+      ru: Строка счёта
+    synonyms:
+      en: [line item, order line, item sold]
+      ru: [позиция счёта]
+    description: One item on an invoice, with its unit price and quantity.
+
+  - id: invoice-total
+    kind: attribute
+    of: invoice
+    extends: money-amount
+    labels:
+      en: Invoice total
+      ru: Сумма счёта
+    synonyms:
+      en: [total, amount charged, invoice amount]
+      ru: [итого]
+    description: The amount charged on an invoice, normally the sum of its lines.
+
+  - id: unit-price
+    kind: attribute
+    of: invoice-line
+    extends: money-amount
+    labels:
+      en: Unit price
+      ru: Цена за единицу
+    synonyms:
+      en: [price, price each, item price]
+      ru: [цена]
+    description: The price of one unit of an item.
+
+  - id: quantity
+    kind: attribute
+    of: invoice-line
+    labels:
+      en: Quantity
+      ru: Количество
+    synonyms:
+      en: [qty, number of items, units]
+    description: How many units of an item were sold on one line.
+    unit: items
+
+  - id: revenue
+    kind: measure
+    labels:
+      en: Revenue
+      ru: Выручка
+    synonyms:
+      en: [sales, sales amount, turnover, takings, spend, purchases, money spent]
+      ru: [продажи, объём продаж, оборот, траты, покупки]
+    description: >-
+      The money received from sales over a period, before costs. From the
+      buyer's side the same number is spend: "which countries buy the most"
+      asks for revenue grouped by the buyer's country.
+    measure:
+      formula: The sum of the invoice totals of the sales in scope.
+      aggregation: sum
+      inputs: [invoice-total]
