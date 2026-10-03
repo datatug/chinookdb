@@ -1,0 +1,28 @@
+format: meaning/draft-1
+id: statistics
+name: Statistics
+description: Derived measures that apply to any dataset.
+license: CC0-1.0
+concepts:
+  - id: per-capita
+    kind: measure
+    labels:
+      en: Per capita
+      ru: На душу населения
+    synonyms:
+      en: [per person, per head, relative to population, per million people, per thousand people]
+      ru: [на человека, на миллион человек, относительно населения]
+    description: >-
+      A pattern, not a number on its own: any measure for a place divided by
+      the population of the same place, so that large and small places can
+      be compared. It is a ratio, so it is never summed across places. A
+      concept that extends it names the measure, the scale and the population
+      source and year, and states its unit as the measure's unit per the
+      scale's number of people (USD per million people).
+    measure:
+      formula: >-
+        The measure for a place, divided by the population of that place
+        (same year where possible), multiplied by the scale (1 for "per
+        person", 1,000,000 for "per million people").
+      aggregation: none
+      inputs: [population]

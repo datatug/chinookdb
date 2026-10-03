@@ -1,0 +1,39 @@
+---
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { parse as parseYaml } from 'yaml';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { tablePath } from '../../data/model';
+import model from '../../../model/chinook.modelspec.json';
+import checksums from '../../../model/checksums.json';
+
+type Property = { type?: string; entity?: string; required?: boolean };
+type Binding = { model: string; property?: string; role: string };
+type Concept = { id: string; kind: string; labels: Record<string, string>; extends?: string; 'values-of'?: string; unit?: string; source?: string; bindings?: Binding[]; measure?: { inputs?: string[] } };
+
+const meaning = parseYaml(readFileSync(join(process.cwd(), 'model', 'chinook.meaning.yaml'), 'utf8')) as { concepts: Concept[] };
+const entities = Object.entries(model.entities as Record<string, { key: string[]; properties: Record<string, Property> }>);
+const files = [
+  ['chinook.modelspec.hcl', 'ModelSpec model', 'The data model as authored: 11 entities, their properties, keys and references.'],
+  ['chinook.modelspec.json', 'ModelSpec JSON', 'The same model as the ModelSpec JSON AST, for tools.'],
+  ['chinook.meaning.yaml', 'Meaning file', 'What the data means: concepts, English and Russian labels, synonyms, units, bindings to the model.'],
+  ['vendor/meaninggraph-core/meaning.schema.json', 'Meaning file schema', 'JSON Schema of the draft meaning-file format (meaning/draft-1), with the universal concepts.'],
+  ['checksums.json', 'Checksums', 'SHA-256 and size of every file under /model/.'],
+] as const;
+const sizeOf = (path: string) => (checksums.files as Record<string, { bytes: number }>)[path]?.bytes;
+const binds = (concept: Concept) => (concept.bindings ?? []).map((b) => `${b.model.replace('modelspec:///chinook.', '')}${b.property ? `.${b.property}` : ''} (${b.role})`);
+const shortRef = (ref?: string) => ref?.replace('meaning://github.com/meaninggraph/core/', 'core/');
+---
+<BaseLayout title="Data model and meaning — Chinook Database | ChinookDB" description="The Chinook sample database as a storage-neutral ModelSpec data model and a meaning file: concepts, synonyms, units and English and Russian labels.">
+  <section class="page-intro shell"><p class="eyebrow">Model and meaning</p><h1>Data model</h1><p>Two files describe Chinook without tying it to a database engine. The <strong>model</strong> says what is stored: entities, properties, keys and references, in <a href="https://modelspec.org">ModelSpec</a>. The <strong>meaning file</strong> says what the data means, in words people use, so a tool can recognise a question such as "Which countries buy the most music relative to their population?" and explain the terms of its answer.</p></section>
+  <section class="shell section"><div class="download-layout"><div><div class="section-heading compact"><div><p class="eyebrow">Files</p><h2>Published under /model/.</h2></div></div><div class="big-download-list">{files.map(([path, title, text]) => <a href={`/model/${path}`}><span><strong>{title}</strong><small>{text} <code>{path}</code>{sizeOf(path) ? ` · ${sizeOf(path)!.toLocaleString()} bytes` : ''}</small></span><b>↓</b></a>)}</div></div><div class="download-aside"><div class="content-card"><p class="eyebrow">Status</p><h2>Drafts.</h2><p>ModelSpec is an early draft standard (1.0-draft) and the meaning-file format is a draft (meaning/draft-1) that may change. CI checks that the model matches the published data and that every reference in the meaning file resolves.</p><p>Universal concepts such as country, invoice and per capita are reused from <code>meaning://github.com/meaninggraph/core</code>; until that repository is public, a copy is published under <a href="/model/vendor/meaninggraph-core/README.md">/model/vendor/meaninggraph-core/</a>.</p><p>Licences: the model and this site's code are MIT; the meaning file and the universal concepts are CC0-1.0; the Chinook data keeps its upstream MIT licence.</p></div></div></div></section>
+  <section class="shell section"><div class="section-heading compact"><div><p class="eyebrow">Model</p><h2>{entities.length} entities.</h2></div><span class="muted">References are typed: a property that refers to another entity says which.</span></div><div class="content-card"><div class="schema-scroll"><table class="schema-table"><thead><tr><th>Entity</th><th>Key</th><th>Properties</th><th>References</th></tr></thead><tbody>{entities.map(([name, entity]) => <tr><th scope="row"><a href={tablePath(name)}><code>{name}</code></a></th><td><code>{entity.key.join(', ')}</code></td><td>{Object.keys(entity.properties).length}</td><td>{Object.entries(entity.properties).filter(([, p]) => p.entity).map(([property, p]) => <code>{property} → {p.entity} </code>)}</td></tr>)}</tbody></table></div></div></section>
+  <section class="shell section"><div class="section-heading compact"><div><p class="eyebrow">Meaning</p><h2>{meaning.concepts.length} concepts.</h2></div></div><div class="content-card"><div class="schema-scroll"><table class="schema-table"><thead><tr><th>Concept</th><th>Kind</th><th>English</th><th>Russian</th><th>Kind of / values of</th><th>Bound to</th></tr></thead><tbody>{meaning.concepts.map((concept) => <tr><th scope="row"><code>{concept.id}</code></th><td>{concept.kind}</td><td>{concept.labels.en}{concept.unit ? <small class="muted"> ({concept.unit})</small> : ''}</td><td>{concept.labels.ru ?? '—'}</td><td>{concept.extends ? <code>kind of {shortRef(concept.extends)} </code> : ''}{concept['values-of'] ? <code>values of {shortRef(concept['values-of'])}</code> : ''}{!concept.extends && !concept['values-of'] ? '—' : ''}</td><td>{binds(concept).length ? binds(concept).map((b) => <code>{b} </code>) : concept.measure?.inputs ? <span class="muted">from {concept.measure.inputs.join(', ')}</span> : concept.source ? <span class="muted">external: {concept.source}</span> : '—'}</td></tr>)}</tbody></table></div></div></section>
+</BaseLayout>
+
+<style>
+  .schema-scroll { margin-bottom: -25px; }
+  .schema-table tbody tr:last-child > * { border-bottom: 0; }
+  .schema-table td code { display: inline-block; margin: 0 6px 2px 0; }
+  .big-download-list small code { font-size: 11px; }
+</style>

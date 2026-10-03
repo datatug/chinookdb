@@ -26,6 +26,16 @@ jobs:
       - run: pnpm build
       - run: pnpm validate
       - run: pnpm test:data
+      - run: pnpm test:model
+      - name: Generated model files are committed
+        run: |
+          if [ -n "$(git status --porcelain -- model/)" ]; then
+            git status --short -- model/
+            echo "::error::model/ differs from what pnpm generate writes; run pnpm generate and commit the result"
+            exit 1
+          fi
+      - name: ModelSpec lint (specscore graph lint)
+        run: pnpm lint:modelspec
       - name: Data drift guard
         env:
           BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}

@@ -4,13 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "generate": "node scripts/generate-data.mjs",
+    "generate": "node scripts/generate-data.mjs && node scripts/generate-model.mjs",
     "dev": "pnpm generate && astro dev",
     "build": "pnpm generate && astro build",
     "preview": "astro preview",
     "check": "astro check",
     "validate": "node scripts/validate-data.mjs",
     "test:data": "node --test scripts/test-data.mjs",
+    "test:model": "node --test scripts/test-model.mjs",
+    "lint:modelspec": "bash scripts/lint-modelspec.sh",
     "check:drift": "node scripts/check-data-drift.mjs",
     "test:worker": "node --import tsx/esm scripts/test-worker.ts"
   },
@@ -21,6 +23,8 @@
   "devDependencies": {
     "@astrojs/check": "^0.9.4",
     "@types/node": "^22.15.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "tsx": "^4.19.2",
     "typescript": "^5.9.2",
     "wrangler": "^4.38.0"

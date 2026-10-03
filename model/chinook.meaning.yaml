@@ -1,0 +1,469 @@
+format: meaning/draft-1
+id: chinook
+name: Chinook music store
+description: >-
+  What the Chinook sample database means: a digital music store that sells
+  tracks to customers in 24 countries. Each concept says what it is, the words
+  people use for it, and which ModelSpec entity or property holds it, in which
+  role. Concepts that are not specific to Chinook (country, currency,
+  customer, invoice, price, revenue, date, population, per capita) are reused
+  from the universal concepts at meaning://github.com/meaninggraph/core.
+license: CC0-1.0
+models:
+  chinook: chinook.modelspec.hcl
+sources:
+  - id: world-bank-population
+    provider: World Bank
+    dataset: SP.POP.TOTL
+    title: Population, total (World Development Indicators)
+    year: 2025
+    license: CC-BY-4.0
+    url: https://data.worldbank.org/indicator/SP.POP.TOTL
+    note: >-
+      Not part of Chinook. The latest observation per country. As of
+      github.com/datatug/chinook-demo commit d2fc437 (data/geo/population_wb),
+      the snapshot the DataTug Chinook demo uses, it is 2025 for all 24
+      Chinook countries.
+
+concepts:
+  # The catalogue
+
+  - id: artist
+    kind: entity
+    labels:
+      en: Artist
+      ru: Исполнитель
+    synonyms:
+      en: [band, musician, performer, singer, group, act]
+      ru: [артист, группа, музыкант]
+    description: A recording artist or band, known by its name.
+    bindings:
+      - model: modelspec:///chinook.Artist
+        role: entity
+      - model: modelspec:///chinook.Artist
+        property: ArtistId
+        role: identifier
+      - model: modelspec:///chinook.Artist
+        property: Name
+        role: display-name
+      - model: modelspec:///chinook.Album
+        property: ArtistId
+        role: foreign-key
+        note: The artist of an album.
+
+  - id: album
+    kind: entity
+    labels:
+      en: Album
+      ru: Альбом
+    synonyms:
+      en: [record, release, LP]
+      ru: [пластинка, релиз]
+    description: An album by one artist, known by its title.
+    bindings:
+      - model: modelspec:///chinook.Album
+        role: entity
+      - model: modelspec:///chinook.Album
+        property: Title
+        role: display-name
+      - model: modelspec:///chinook.Track
+        property: AlbumId
+        role: foreign-key
+        note: The album a track is on (the column allows none; every track in this data has one).
+
+  - id: track
+    kind: entity
+    labels:
+      en: Track
+      ru: Трек
+    synonyms:
+      en: [song, tune, recording, piece of music, video]
+      ru: [песня, композиция, запись]
+    description: One audio or video track that the store sells, usually on an album.
+    bindings:
+      - model: modelspec:///chinook.Track
+        role: entity
+      - model: modelspec:///chinook.Track
+        property: Name
+        role: display-name
+      - model: modelspec:///chinook.InvoiceLine
+        property: TrackId
+        role: foreign-key
+        note: The track bought on an invoice line.
+
+  - id: track-length
+    kind: attribute
+    of: track
+    labels:
+      en: Track length
+      ru: Длительность трека
+    synonyms:
+      en: [duration, length, running time, how long]
+      ru: [длительность, продолжительность]
+    description: How long a track plays.
+    unit: milliseconds
+    bindings:
+      - model: modelspec:///chinook.Track
+        property: Milliseconds
+        role: value
+
+  - id: list-price
+    kind: attribute
+    of: track
+    extends: meaning://github.com/meaninggraph/core/price
+    labels:
+      en: List price
+      ru: Цена трека
+    synonyms:
+      en: [track price, price of a track, how much a track costs]
+    description: >-
+      The price of one copy of a track in the catalogue (0.99 or 1.99). The
+      price actually charged is on the invoice line (see unit-price).
+    unit: USD
+    bindings:
+      - model: modelspec:///chinook.Track
+        property: UnitPrice
+        role: value
+
+  - id: genre
+    kind: entity
+    labels:
+      en: Genre
+      ru: Жанр
+    synonyms:
+      en: [style, music style, kind of music, category]
+      ru: [стиль, направление]
+    description: A music genre such as Rock or Jazz, assigned to tracks.
+    bindings:
+      - model: modelspec:///chinook.Genre
+        role: entity
+      - model: modelspec:///chinook.Genre
+        property: Name
+        role: display-name
+      - model: modelspec:///chinook.Track
+        property: GenreId
+        role: foreign-key
+        note: A track's genre.
+
+  - id: media-type
+    kind: entity
+    labels:
+      en: Media type
+      ru: Формат файла
+    synonyms:
+      en: [format, file format, file type, encoding, audio format]
+      ru: [формат, тип файла]
+    description: The file format of a track, such as "MPEG audio file" or "Protected AAC audio file".
+    bindings:
+      - model: modelspec:///chinook.MediaType
+        role: entity
+      - model: modelspec:///chinook.MediaType
+        property: Name
+        role: display-name
+      - model: modelspec:///chinook.Track
+        property: MediaTypeId
+        role: foreign-key
+        note: A track's media type.
+
+  - id: playlist
+    kind: entity
+    labels:
+      en: Playlist
+      ru: Плейлист
+    synonyms:
+      en: [play list, collection, mix]
+      ru: [подборка, список воспроизведения]
+    description: >-
+      A named list of tracks. A track can be on many playlists and a playlist
+      holds many tracks; PlaylistTrack records which track is on which list.
+    bindings:
+      - model: modelspec:///chinook.Playlist
+        role: entity
+      - model: modelspec:///chinook.Playlist
+        property: Name
+        role: display-name
+      - model: modelspec:///chinook.PlaylistTrack
+        property: PlaylistId
+        role: foreign-key
+        note: Playlist membership, one row per track on a playlist.
+
+  # People
+
+  - id: customer
+    kind: entity
+    extends: meaning://github.com/meaninggraph/core/customer
+    labels:
+      en: Customer
+      ru: Клиент
+    description: A person who buys music from the store. Some customers name a company.
+    bindings:
+      - model: modelspec:///chinook.Customer
+        role: entity
+      - model: modelspec:///chinook.Invoice
+        property: CustomerId
+        role: foreign-key
+        note: The customer who made a purchase.
+
+  - id: customer-country
+    kind: attribute
+    of: customer
+    values-of: meaning://github.com/meaninggraph/core/country
+    labels:
+      en: Customer country
+      ru: Страна клиента
+    synonyms:
+      en: [where customers live, customer's country, home country]
+      ru: [страна проживания]
+    description: >-
+      The country in the customer's address, as Chinook spells it ("USA",
+      "Czech Republic"). For questions about where music is bought, use
+      billing-country instead.
+    bindings:
+      - model: modelspec:///chinook.Customer
+        property: Country
+        role: value
+
+  - id: employee
+    kind: entity
+    extends: meaning://github.com/meaninggraph/core/employee
+    labels:
+      en: Employee
+      ru: Сотрудник
+    description: A member of the store's staff. Employee.Title is the job title.
+    bindings:
+      - model: modelspec:///chinook.Employee
+        role: entity
+
+  - id: manager
+    kind: attribute
+    of: employee
+    extends: meaning://github.com/meaninggraph/core/manager
+    values-of: employee
+    labels:
+      en: Manager
+      ru: Руководитель
+    description: The employee someone reports to. Empty for the general manager.
+    bindings:
+      - model: modelspec:///chinook.Employee
+        property: ReportsTo
+        role: foreign-key
+
+  - id: support-rep
+    kind: attribute
+    of: customer
+    values-of: employee
+    labels:
+      en: Support representative
+      ru: Специалист поддержки
+    synonyms:
+      en: [support rep, sales support agent, account manager, rep]
+      ru: [менеджер клиента, сотрудник поддержки]
+    description: The employee who looks after a customer.
+    bindings:
+      - model: modelspec:///chinook.Customer
+        property: SupportRepId
+        role: foreign-key
+
+  # Sales
+
+  - id: invoice
+    kind: entity
+    extends: meaning://github.com/meaninggraph/core/invoice
+    labels:
+      en: Invoice
+      ru: Счёт
+    synonyms:
+      en: [purchase, sale, order]
+      ru: [покупка, заказ]
+    description: >-
+      One purchase by a customer: in Chinook every invoice is a completed
+      order, so "purchase" and "order" name it too. Chinook has 412 invoices
+      dated from 2021-01-01 to 2025-12-22.
+    bindings:
+      - model: modelspec:///chinook.Invoice
+        role: entity
+      - model: modelspec:///chinook.InvoiceLine
+        property: InvoiceId
+        role: foreign-key
+        note: The invoice a line is on.
+
+  - id: invoice-date
+    kind: dimension
+    of: invoice
+    extends: meaning://github.com/meaninggraph/core/date
+    labels:
+      en: Invoice date
+      ru: Дата счёта
+    synonyms:
+      en: [purchase date, when, year, month, sale date]
+      ru: [дата покупки, год, месяц]
+    description: The date of a purchase. The time part is always midnight.
+    bindings:
+      - model: modelspec:///chinook.Invoice
+        property: InvoiceDate
+        role: value
+
+  - id: billing-country
+    kind: dimension
+    of: invoice
+    values-of: meaning://github.com/meaninggraph/core/country
+    labels:
+      en: Country
+      ru: Страна
+    synonyms:
+      en: [billing country, country of purchase, where music is bought, buying country]
+      ru: [страна покупки, страна покупателя]
+    description: >-
+      The country an invoice is billed to, as Chinook spells it ("USA",
+      "Czech Republic"). Use this one when a question asks which countries buy
+      or spend: it is recorded on the sale itself, and it is the column the
+      saved per-capita query groups by. In this data it equals the customer's
+      country on every invoice, but it would stay right if a customer moved.
+      Chinook's spellings are matched to countries by the labels and aliases
+      of the universal country concept ("USA" is an alias of United States).
+    bindings:
+      - model: modelspec:///chinook.Invoice
+        property: BillingCountry
+        role: value
+        match: labels
+
+  - id: invoice-line
+    kind: entity
+    of: invoice
+    extends: meaning://github.com/meaninggraph/core/invoice-line
+    labels:
+      en: Invoice line
+      ru: Строка счёта
+    description: One track bought on an invoice.
+    bindings:
+      - model: modelspec:///chinook.InvoiceLine
+        role: entity
+
+  - id: invoice-total
+    kind: attribute
+    of: invoice
+    extends: meaning://github.com/meaninggraph/core/invoice-total
+    labels:
+      en: Invoice total
+      ru: Сумма счёта
+    description: >-
+      The amount charged on an invoice. It equals the sum of UnitPrice x
+      Quantity over the invoice's lines (true for all 412 invoices).
+    unit: USD
+    bindings:
+      - model: modelspec:///chinook.Invoice
+        property: Total
+        role: value
+
+  - id: unit-price
+    kind: attribute
+    of: invoice-line
+    extends: meaning://github.com/meaninggraph/core/unit-price
+    labels:
+      en: Unit price
+      ru: Цена за единицу
+    description: The price charged for one copy of a track on an invoice line.
+    unit: USD
+    bindings:
+      - model: modelspec:///chinook.InvoiceLine
+        property: UnitPrice
+        role: value
+
+  - id: quantity
+    kind: attribute
+    of: invoice-line
+    extends: meaning://github.com/meaninggraph/core/quantity
+    labels:
+      en: Quantity
+      ru: Количество
+    description: Copies of a track bought on one invoice line (always 1 in Chinook).
+    unit: items
+    bindings:
+      - model: modelspec:///chinook.InvoiceLine
+        property: Quantity
+        role: value
+
+  - id: music-sales
+    kind: measure
+    extends: meaning://github.com/meaninggraph/core/revenue
+    labels:
+      en: Music sales
+      ru: Продажи музыки
+    synonyms:
+      en: [music sales, sales, revenue, spend, how much music, buy the most, buys music]
+      ru: [продажи, покупают музыку, выручка]
+    description: >-
+      Money the store took for music. The data names no currency; Chinook's
+      prices (0.99 and 1.99) are read as US dollars.
+    unit: USD
+    measure:
+      formula: >-
+        The sum of Invoice.Total over the invoices in scope. Summing
+        InvoiceLine.UnitPrice x InvoiceLine.Quantity over the same invoices'
+        lines gives the same amount.
+      aggregation: sum
+      inputs: [invoice-total, unit-price, quantity]
+      dimensions: [billing-country, invoice-date]
+    bindings:
+      - model: modelspec:///chinook.Invoice
+        property: Total
+        role: value
+      - model: modelspec:///chinook.InvoiceLine
+        property: UnitPrice
+        role: value
+      - model: modelspec:///chinook.InvoiceLine
+        property: Quantity
+        role: value
+
+  # Per capita: the hero question
+  # "Which countries buy the most music relative to their population?"
+
+  - id: population
+    kind: measure
+    extends: meaning://github.com/meaninggraph/core/population
+    source: world-bank-population
+    labels:
+      en: Population
+      ru: Население
+    description: >-
+      Not in Chinook. The population of each billing country, from the World
+      Bank, matched to Chinook's country names through the ISO 3166-1 alpha-2
+      code of the universal country concept. A country without a population
+      figure drops out of per-capita results.
+    unit: people
+    measure:
+      formula: The World Bank's latest total population of the country.
+      aggregation: none
+      dimensions: [billing-country]
+
+  - id: music-sales-per-capita
+    kind: measure
+    extends: meaning://github.com/meaninggraph/core/per-capita
+    labels:
+      en: Music sales per million people
+      ru: Продажи музыки на миллион человек
+    synonyms:
+      en:
+        - music sales per capita
+        - sales per million people
+        - sales per person
+        - relative to their population
+        - buy the most music relative to population
+      ru:
+        - продажи на миллион человек
+        - продажи на душу населения
+        - на душу населения
+    description: >-
+      Music sales in a country divided by its population, per million people,
+      so that small and large countries can be compared. Answers "Which
+      countries buy the most music relative to their population?".
+    unit: USD per million people
+    measure:
+      formula: >-
+        For each billing country: music sales divided by the country's
+        population, multiplied by 1,000,000. The order is highest first.
+      aggregation: none
+      inputs: [music-sales, population]
+      dimensions: [billing-country]
+      scale: 1000000
+      query: https://github.com/datatug/chinook-demo/blob/main/queries/sales/chinook-sales-per-capita.query.dtql

@@ -1,0 +1,108 @@
+format: meaning/draft-1
+id: commerce
+name: Commerce
+description: >-
+  Buying and selling: customers, invoices, prices and revenue.
+license: CC0-1.0
+concepts:
+  - id: customer
+    kind: entity
+    labels:
+      en: Customer
+      ru: Клиент
+    synonyms:
+      en: [buyer, client, purchaser, shopper]
+      ru: [покупатель, заказчик]
+    description: A person or organization that purchases goods or services.
+
+  - id: invoice
+    kind: entity
+    labels:
+      en: Invoice
+      ru: Счёт
+    synonyms:
+      en: [bill, invoices]
+      ru: [счёт-фактура, счета]
+    description: >-
+      A request for payment for goods or services supplied to a customer: what
+      was supplied, when, where it is billed, and the amount charged. Not an
+      order (a request to supply) and not a receipt (proof of payment). A
+      dataset whose invoices are purchases says so with its own synonyms.
+
+  - id: invoice-line
+    kind: entity
+    of: invoice
+    labels:
+      en: Invoice line
+      ru: Строка счёта
+    synonyms:
+      en: [line item, invoice item]
+      ru: [позиция счёта]
+    description: One item on an invoice, with its unit price and quantity.
+
+  - id: invoice-total
+    kind: attribute
+    of: invoice
+    extends: money-amount
+    labels:
+      en: Invoice total
+      ru: Сумма счёта
+    synonyms:
+      en: [total, amount charged, invoice amount]
+      ru: [итого]
+    description: The amount charged on an invoice, normally the sum of its lines.
+
+  - id: price
+    kind: attribute
+    extends: money-amount
+    labels:
+      en: Price
+      ru: Цена
+    synonyms:
+      en: [cost, how much]
+      ru: [стоимость]
+    description: >-
+      The amount asked for one unit of a product or service, such as the list
+      price in a catalogue. The amount actually charged on a sale is a
+      unit-price.
+
+  - id: unit-price
+    kind: attribute
+    of: invoice-line
+    extends: price
+    labels:
+      en: Unit price
+      ru: Цена за единицу
+    synonyms:
+      en: [price each, item price]
+      ru: [цена за штуку]
+    description: The price charged for one unit of an item on an invoice line.
+
+  - id: quantity
+    kind: attribute
+    of: invoice-line
+    labels:
+      en: Quantity
+      ru: Количество
+    synonyms:
+      en: [qty, number of items, units]
+    description: How many units of an item were sold on one line.
+    unit: items
+
+  - id: revenue
+    kind: measure
+    units-of: currency
+    labels:
+      en: Revenue
+      ru: Выручка
+    synonyms:
+      en: [sales, sales amount, turnover, takings, spend, purchases, money spent]
+      ru: [продажи, объём продаж, оборот, траты, покупки]
+    description: >-
+      The money received from sales over a period, before costs. From the
+      buyer's side the same number is spend, so a question about who buys or
+      spends the most asks for revenue grouped by the buyer.
+    measure:
+      formula: The sum of the invoice totals of the sales in scope.
+      aggregation: sum
+      inputs: [invoice-total]

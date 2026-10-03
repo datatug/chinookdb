@@ -6,7 +6,7 @@ import worker from '../src/worker.ts';
 
 const root = join(fileURLToPath(new URL('.', import.meta.url)), '..');
 const wrangler = JSON.parse(await readFile(join(root, 'wrangler.jsonc'), 'utf8')) as { assets: { run_worker_first: string[] } };
-for (const path of ['/data/*', '/embed/datatug.js', '/ovdb', '/ovdb/*', '/.well-known/openvaultdb']) {
+for (const path of ['/data/*', '/model/*', '/embed/datatug.js', '/ovdb', '/ovdb/*', '/.well-known/openvaultdb']) {
   assert.ok(wrangler.assets.run_worker_first.includes(path), `Worker must receive ${path}`);
 }
 const assets = {
@@ -42,6 +42,27 @@ assert.equal(missing.status, 404);
 assert.deepEqual(await missing.json(), { error: 'Not found' });
 assert.equal((await request('/data/json/chinook.Artist.json', 'POST')).status, 405);
 
+for (const [path, type] of [
+  ['/model/chinook.modelspec.hcl', 'text/plain; charset=utf-8'],
+  ['/model/chinook.modelspec.json', 'application/json; charset=utf-8'],
+  ['/model/chinook.meaning.yaml', 'application/yaml; charset=utf-8'],
+  ['/model/vendor/meaninggraph-core/meaning.schema.json', 'application/json; charset=utf-8'],
+  ['/model/vendor/README.md', 'text/markdown; charset=utf-8'],
+  ['/model/checksums.json', 'application/json; charset=utf-8'],
+  ['/model/vendor/meaninggraph-core/geo.meaning.yaml', 'application/yaml; charset=utf-8'],
+] as const) {
+  const response = await request(path);
+  assert.equal(response.status, 200, path);
+  assert.equal(response.headers.get('Content-Type'), type, path);
+  assert.equal(response.headers.get('Access-Control-Allow-Origin'), '*', path);
+  assert.deepEqual(new Uint8Array(await response.arrayBuffer()), new Uint8Array(await readFile(join(root, path.slice(1)))), `${path} is published byte for byte from model/`);
+}
+const modelPage = await request('/model/');
+assert.equal(modelPage.status, 200);
+assert.equal(modelPage.headers.get('Access-Control-Allow-Origin'), null, 'the /model/ page is a page, not a data file');
+assert.match(await modelPage.text(), /chinook\.meaning\.yaml/);
+assert.equal((await request('/model/missing.yaml')).status, 404);
+
 const discovery = await request('/.well-known/openvaultdb');
 assert.equal(discovery.status, 200);
 const discovered = await discovery.json() as { databases: { url: string; apiUrl: string }[] };
@@ -63,4 +84,4 @@ assert.equal(posted.headers.get('Location'), 'https://cloud.openvaultdb.com/v1/d
 assert.equal((await request('/ovdb/v1/databases/chinook/dtql', 'OPTIONS')).status, 204);
 assert.equal((await request('/ovdb/v1/databases/chinook/query?q=legacy')).status, 410);
 
-console.log('ChinookDB static data and OVDB compatibility routes pass.');
+console.log('ChinookDB static data, model files and OVDB compatibility routes pass.');
