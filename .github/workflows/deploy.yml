@@ -1,0 +1,111 @@
+# Checks, builds and deploys chinookdb.com (the Cloudflare Worker chinookdb).
+#
+#   pull_request        the checks and the build only; never deploys
+#   push to main        the checks, the build, the deploy and a smoke check
+#   workflow_dispatch   the same, run from main
+#
+# chinookdb.com is built from this repository alone (no external index), so there is no scheduled run: a
+# deploy is due exactly when main changes.
+#
+# Deploying needs the CLOUDFLARE_API_TOKEN secret and the CLOUDFLARE_ACCOUNT_ID variable (an identifier,
+# not a secret). Without either, every step except the deploy and the smoke check still runs and the run
+# ends green with a notice.
+#
+# The checks repeat those of ci.yml (which keeps running beside this workflow): when a check is added
+# there, add it here too, so a deploy waits for it (scripts/test-deploy.mjs fails when they differ). The deploy
+# is the manual one from the README: `pnpm build`, then `pnpm exec wrangler deploy`. There is no automatic
+# rollback. See docs/DEPLOYMENT.md.
+name: Deploy
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time, and every run that can deploy is in the same group. A queued run is replaced by a newer
+# one, which builds the newer main, so nothing is lost. A pull request run, or a manual run on another ref (which
+# cannot deploy), has a group of its own and so can never replace a pending run on main.
+concurrency:
+  group: ${{ (github.event_name == 'pull_request' || github.ref != 'refs/heads/main') && format('check-{0}', github.ref) || 'deploy' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  deploy:
+    name: check · build · deploy
+    # never in a fork
+    if: github.repository == 'datatug/chinookdb'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      WRANGLER_SEND_METRICS: "false"
+      BUILD_COMMIT: ${{ github.sha }}
+      # 'true' when this run may publish: a push to main or a manual run on main
+      DEPLOY_EVENT: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+      # 'true' when the token and the account id exist (compared here, so the secret is not copied into a step)
+      HAS_CREDENTIALS: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && vars.CLOUDFLARE_ACCOUNT_ID != '' }}
+    steps:
+      # Actions are pinned by full commit SHA (the tag is in the comment): this job holds the Cloudflare token.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 9
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm validate
+      - run: pnpm test:data
+      # The universal concepts and the schema come from github.com/meaninggraph/core at the commit
+      # that model/chinook.meaning.yaml pins. A commit is immutable, so the checkout is cached
+      # under its id (the key changes with the pin) and verified before use; when the cache is
+      # empty the test fetches the commit, retrying on network errors.
+      - name: Cache the pinned meaninggraph/core checkout
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .cache/meaning-sources
+          key: meaning-sources-${{ hashFiles('model/*.meaning.yaml') }}
+      - run: pnpm test:model
+      - name: OVDB manifest (offline)
+        run: pnpm check:ovdb
+      - name: Generated model files are committed
+        run: |
+          if [ -n "$(git status --porcelain -- model/)" ]; then
+            git status --short -- model/
+            echo "::error::model/ differs from what pnpm generate writes; run pnpm generate and commit the result"
+            exit 1
+          fi
+      - name: ModelSpec lint (specscore graph lint)
+        run: pnpm lint:modelspec
+      - name: Data drift guard
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
+        run: pnpm check:drift "$BASE"
+      - run: pnpm test:worker
+      - name: Deploy marker tests
+        run: node --test scripts/test-deploy.mjs
+
+      - name: Write the build marker
+        run: node scripts/write-build-info.mjs
+      - name: Deploy skipped, no credentials
+        if: env.DEPLOY_EVENT == 'true' && env.HAS_CREDENTIALS != 'true'
+        run: |
+          echo "::notice::Deploy and smoke check skipped: no CLOUDFLARE_API_TOKEN secret or CLOUDFLARE_ACCOUNT_ID variable. The checks and the build passed."
+          echo "Deploy and smoke check skipped: no CLOUDFLARE_API_TOKEN secret or CLOUDFLARE_ACCOUNT_ID variable. The checks and the build passed." >> "$GITHUB_STEP_SUMMARY"
+      - name: Deploy
+        if: env.DEPLOY_EVENT == 'true' && env.HAS_CREDENTIALS == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm exec wrangler deploy --config wrangler.jsonc
+      - name: Smoke check (the live site serves this build)
+        if: env.DEPLOY_EVENT == 'true' && env.HAS_CREDENTIALS == 'true'
+        run: node scripts/smoke-live.mjs
