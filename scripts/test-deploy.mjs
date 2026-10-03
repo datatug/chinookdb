@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { BUILD_INFO_FORMAT, FreshnessError, MARKER_PATH, buildInfo, compareBuild, fetchJson, markerFacts, verifyLive } from './lib/freshness.mjs';
+import { BUILD_INFO_FORMAT, FreshnessError, MARKER_PATH, buildInfo, compareBuild, expectOk, fetchJson, markerFacts, printable, shortCommit, verifyLive } from './lib/freshness.mjs';
 import { writeBuildInfo } from './write-build-info.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -88,62 +88,147 @@ test('verifyLive: the live site serves the build at once or after a few attempts
   assert.equal((await verifyLive({ fetch: slow, markerUrl: MARKER_URL, built, sleep: noSleep })).ok, true);
   assert.equal(slow.calls.get(MARKER_URL), 3);
   const stale = fakeFetch({ [MARKER_URL]: { commit: OTHER } });
-  const result = await verifyLive({ fetch: stale, markerUrl: MARKER_URL, built, attempts: 4, sleep: noSleep });
+  const result = await verifyLive({ fetch: stale, markerUrl: MARKER_URL, built, delaysMs: [1, 1, 1], sleep: noSleep });
   assert.equal(result.ok, false);
   assert.match(result.reasons[0], /site commit bbbbbbbbbbbb is live/);
-  assert.equal(stale.calls.get(MARKER_URL), 4);
-  const gone = await verifyLive({ fetch: fakeFetch({ [MARKER_URL]: 404 }), markerUrl: MARKER_URL, built, attempts: 2, sleep: noSleep });
+  assert.equal(stale.calls.get(MARKER_URL), 4, 'one read, then one per wait');
+  const gone = await verifyLive({ fetch: fakeFetch({ [MARKER_URL]: 404 }), markerUrl: MARKER_URL, built, delaysMs: [1], sleep: noSleep });
   assert.equal(gone.ok, false);
   assert.match(gone.reasons[0], /HTTP 404/);
   assert.equal((await verifyLive({ fetch: fakeFetch({}), markerUrl: MARKER_URL, built: {}, sleep: noSleep })).ok, false);
 });
 
+// ---------------------------------------------------------------- values from public URLs
+
+test('printable drops control characters and colon runs; commits print only with the right shape', () => {
+  assert.equal(printable('z\n::error::x\r\u0007'), 'z  error x ');
+  for (const text of ['::::warning::', ':::', ': ::: :', '\n::\n::']) assert.ok(!/::/.test(printable(text)), text);
+  assert.equal(shortCommit(COMMIT), 'aaaaaaaaaaaa');
+  assert.equal(shortCommit('z\n::error::x'), 'invalid');
+  const hostile = compareBuild({ live: { commit: 'z\n::error::x' }, commit: COMMIT });
+  assert.match(hostile.reasons[0], /site commit invalid is live/);
+  assert.ok(!hostile.reasons.join('').includes('::'));
+  assert.throws(() => buildInfo('z\n::error::x'), error => !/\n|::/.test(error.message));
+});
+
+test('expectOk retries with growing waits, then fails with a cleaned reason; verifyLive waits as long', async () => {
+  const waits = [];
+  const sleep = async ms => { waits.push(ms); };
+  assert.deepEqual(await expectOk({ fetch: fakeFetch({ 'https://site.test/': n => (n < 3 ? 503 : { ok: 1 }) }), url: 'https://site.test/', sleep }), { ok: true, reason: '' });
+  assert.deepEqual(waits, [5000, 10000]);
+  waits.length = 0;
+  const down = await expectOk({ fetch: fakeFetch({ 'https://site.test/': new Error('boom\n::error::x') }), url: 'https://site.test/', sleep });
+  assert.equal(down.ok, false);
+  assert.ok(!/\n|::/.test(down.reason));
+  assert.deepEqual(waits, [5000, 10000, 15000, 20000, 30000, 30000, 30000], 'about two and a half minutes in all');
+  waits.length = 0;
+  const stale = await verifyLive({ fetch: fakeFetch({ [MARKER_URL]: { commit: OTHER } }), markerUrl: MARKER_URL, built: buildInfo(COMMIT), sleep });
+  assert.equal(stale.ok, false);
+  assert.equal(waits.reduce((a, b) => a + b, 0), 140_000);
+});
+
 // ---------------------------------------------------------------- the workflow
 
+const clean = text => text.replace(/^[ \t]*#.*$/gm, '').replace(/[ \t]+#.*$/gm, '').replace(/\n{2,}/g, '\n');
 const workflow = readFileSync(join(root, '.github/workflows/deploy.yml'), 'utf8');
-const code = workflow.replace(/^[ \t]*#.*$/gm, '').replace(/[ \t]+#.*$/gm, '').replace(/\n{2,}/g, '\n');
-const stepText = name => {
-  const start = code.indexOf(`- name: ${name}\n`);
-  assert.notEqual(start, -1, `step ${name}`);
-  const next = code.indexOf('\n      - ', start + 1);
-  return code.slice(start, next === -1 ? undefined : next);
-};
+const code = clean(workflow);
 
-test('the deploy workflow runs on pull requests, pushes to main and by hand, with read-only permissions and one deploy at a time', () => {
-  assert.match(code, /^on:\n {2}pull_request:\n {2}push:\n {4}branches: \[main\]\n {2}workflow_dispatch:\njobs|^on:\n {2}pull_request:\n {2}push:\n {4}branches: \[main\]\n {2}workflow_dispatch:\npermissions:/m);
+/** The steps of the job as {name, uses, run, if, continueOnError, env, with, raw}. */
+function parseSteps(text) {
+  const start = text.indexOf('\n    steps:\n');
+  assert.notEqual(start, -1, 'the job has steps');
+  return text.slice(start + '\n    steps:\n'.length).split('\n      - ').map((piece, i) => {
+    const lines = (i === 0 ? piece.replace(/^ {6}- /, '') : piece).split('\n');
+    const step = { raw: lines.join('\n'), env: '', with: '', run: '' };
+    let mode = '';
+    for (const [n, line] of lines.entries()) {
+      const at = n === 0 ? line : line.slice(8); // the lines after the first are indented by the width of "      - "
+      const key = /^([a-z-]+):(?: (.*))?$/.exec(at);
+      if (key) {
+        mode = key[1];
+        if (mode === 'run') step.run = key[2] === '|' ? '' : key[2];
+        else if (mode !== 'env' && mode !== 'with') step[mode === 'continue-on-error' ? 'continueOnError' : mode] = key[2];
+      } else if (mode === 'run') step.run += `${at.replace(/^ {2}/, '')}\n`;
+      else if (mode === 'env' || mode === 'with') step[mode] += `${at}\n`;
+    }
+    return step;
+  });
+}
+const steps = parseSteps(code);
+const named = name => {
+  const step = steps.find(candidate => candidate.name === name);
+  assert.ok(step, `step ${name}`);
+  return step;
+};
+const index = step => steps.indexOf(step);
+const DEPLOYING = "env.DEPLOY_EVENT == 'true' && env.HAS_CREDENTIALS == 'true'";
+
+test('the deploy workflow runs on pull requests, pushes to main and by hand, with read-only permissions', () => {
+  assert.match(code, /^on:\n {2}pull_request:\n {2}push:\n {4}branches: \[main\]\n {2}workflow_dispatch:\npermissions:/m);
   assert.ok(!/schedule:/.test(code) && !/pull_request_target/.test(code), 'built from this repository alone: no schedule');
   assert.match(code, /^permissions:\n {2}contents: read$/m);
   assert.equal([...code.matchAll(/^\s*permissions:/gm)].length, 1);
   assert.ok(code.includes("if: github.repository == 'datatug/chinookdb'"));
-  assert.match(code, /group: \$\{\{ github\.event_name == 'pull_request' && format\('pr-\{0\}', github\.ref\) \|\| 'deploy' \}\}/);
+});
+
+test('every run that can deploy shares one group; a pull request or a manual run on another ref has its own and can never replace a pending run on main', () => {
+  assert.ok(code.includes("group: ${{ (github.event_name == 'pull_request' || github.ref != 'refs/heads/main') && format('check-{0}', github.ref) || 'deploy' }}"));
   assert.match(code, /cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/);
 });
 
-test('the deploy and the smoke check run only for a push to main or a manual run, and only with credentials', () => {
-  assert.ok(code.includes("DEPLOY_EVENT: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}"));
-  assert.ok(code.includes("HAS_CREDENTIALS: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && vars.CLOUDFLARE_ACCOUNT_ID != '' }}"));
-  for (const name of ['Deploy', 'Smoke check (the live site serves this build)']) {
-    assert.match(stepText(name), /if: env\.DEPLOY_EVENT == 'true' && env\.HAS_CREDENTIALS == 'true'/, name);
-  }
-  assert.match(stepText('Deploy skipped, no credentials'), /if: env\.DEPLOY_EVENT == 'true' && env\.HAS_CREDENTIALS != 'true'/);
-  assert.match(stepText('Deploy skipped, no credentials'), /::notice::/);
-  assert.match(stepText('Deploy skipped, no credentials'), /GITHUB_STEP_SUMMARY/);
-  assert.match(stepText('Deploy'), /run: pnpm exec wrangler deploy --config wrangler\.jsonc$/m);
-  assert.equal([...code.matchAll(/wrangler deploy/g)].length, 1, 'only the deploy step runs wrangler');
-  // the token is read in two places only and never echoed
-  assert.equal([...code.matchAll(/secrets\./g)].length, 2);
-  assert.match(stepText('Deploy'), /CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/);
-  assert.ok(!/echo[^\n]*\$\{?CLOUDFLARE_API_TOKEN/.test(code));
+test('every action is pinned by full commit SHA with its version in a comment, and nothing can fail silently', () => {
+  const uses = steps.filter(step => step.uses);
+  assert.ok(uses.length >= 4, 'checkout, pnpm, node, cache');
+  for (const step of uses) assert.match(step.uses, /^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/, step.uses);
+  for (const line of workflow.split('\n').filter(candidate => /^\s*- uses: /.test(candidate))) assert.match(line, /@[0-9a-f]{40} # v\d+\.\d+\.\d+$/, 'the version is in a comment');
+  assert.ok(!/continue-on-error/.test(code));
+  assert.match(code, /persist-credentials: false/);
 });
 
-test('the workflow repeats every check of ci.yml before it deploys, in the same order', () => {
-  const ci = readFileSync(join(root, '.github/workflows/ci.yml'), 'utf8').replace(/^[ \t]*#.*$/gm, '');
-  const commands = text => [...text.matchAll(/^\s+(?:- )?run: (pnpm [^\n]+)$/gm)].map(match => match[1]);
-  const mine = commands(code);
-  const theirs = commands(ci);
-  assert.ok(theirs.length >= 6);
-  for (const command of theirs) assert.ok(mine.includes(command), `ci.yml runs ${command}, this workflow does not`);
-  assert.deepEqual(mine.filter(command => theirs.includes(command)), theirs, 'the same order');
-  assert.ok(code.indexOf('pnpm test:worker') < code.indexOf('- name: Write the build marker'), 'the marker is written after the checks');
+test('the deploy and the smoke check run only for a push to main or a manual run, and only with credentials; the token is in one step', () => {
+  assert.ok(code.includes("DEPLOY_EVENT: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}"));
+  assert.ok(code.includes("HAS_CREDENTIALS: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && vars.CLOUDFLARE_ACCOUNT_ID != '' }}"));
+  assert.equal(named('Deploy').if, DEPLOYING);
+  assert.equal(named('Smoke check (the live site serves this build)').if, DEPLOYING);
+  assert.equal(named('Deploy skipped, no credentials').if, "env.DEPLOY_EVENT == 'true' && env.HAS_CREDENTIALS != 'true'");
+  assert.match(named('Deploy skipped, no credentials').run, /::notice::/);
+  assert.match(named('Deploy skipped, no credentials').run, /GITHUB_STEP_SUMMARY/);
+  assert.equal(named('Deploy').run.trim(), 'pnpm exec wrangler deploy --config wrangler.jsonc');
+  assert.equal([...code.matchAll(/wrangler deploy/g)].length, 1, 'only the deploy step runs wrangler');
+  assert.equal([...code.matchAll(/secrets\./g)].length, 2);
+  assert.deepEqual(steps.filter(step => /CLOUDFLARE_/.test(step.env)).map(step => step.name), ['Deploy']);
+  assert.match(named('Deploy').env, /CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/);
+  assert.ok(!/echo[^\n]*\$\{?CLOUDFLARE_API_TOKEN/.test(code));
+  assert.ok(index(named('Smoke check (the live site serves this build)')) > index(named('Deploy')));
+});
+
+test('the only expression that feeds a run: block goes through env', () => {
+  for (const step of steps) assert.ok(!step.run.includes('${{'), `an expression inside run: of "${step.name ?? step.run.trim().split('\n')[0]}"`);
+});
+
+// ---- ci.yml and deploy.yml run the same checks ----
+
+const ci = parseSteps(clean(readFileSync(join(root, '.github/workflows/ci.yml'), 'utf8')));
+/** What identifies a step: its action and settings, or its command; the name is compared when ci.yml gives one. */
+// (deploy.yml adds persist-credentials: false to the checkout, and pins by SHA where ci.yml uses a tag.)
+const identity = step => (step.uses ? `uses ${step.uses.replace(/@.*$/, '')} ${JSON.stringify(step.with.split('\n').filter(line => !/persist-credentials/.test(line)))}` : `run ${step.run.trim()}`);
+
+test('deploy.yml runs every step of ci.yml, whatever its command, in the same order, unconditionally, and before the deploy', () => {
+  const deploy = index(named('Deploy'));
+  assert.ok(ci.length >= 12, 'ci.yml has its steps');
+  let last = -1;
+  for (const wanted of ci) {
+    const mine = steps.find(step => identity(step) === identity(wanted));
+    assert.ok(mine, `ci.yml has the step "${wanted.name ?? identity(wanted)}", deploy.yml does not`);
+    if (wanted.name) assert.equal(mine.name, wanted.name, `the step has the same name in both: ${wanted.name}`);
+    assert.equal(mine.if, wanted.if, `"${wanted.name ?? identity(wanted)}" has another condition in deploy.yml`);
+    assert.equal(wanted.if, undefined, 'a ci.yml step has no condition');
+    assert.equal(mine.continueOnError, undefined, `${mine.name ?? identity(mine)} can fail silently`);
+    assert.equal(mine.env.replace(/ +/g, ' '), wanted.env.replace(/ +/g, ' '), `"${wanted.name ?? identity(wanted)}" has another environment in deploy.yml`);
+    assert.ok(index(mine) > last, `"${mine.name ?? identity(mine)}" is out of order`);
+    assert.ok(index(mine) < deploy, `"${mine.name ?? identity(mine)}" runs after the deploy`);
+    last = index(mine);
+  }
+  assert.ok(index(named('Write the build marker')) > last, 'the marker is written after the checks');
   assert.ok(code.includes('fetch-depth: 0'), 'the drift guard needs the history');
 });

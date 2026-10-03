@@ -169,6 +169,10 @@ The deploy needs the `CLOUDFLARE_API_TOKEN` secret and the
 the checks and the build, skips the deploy and the smoke check with a notice, and
 ends green.
 
+There is no automatic rollback: a failed run leaves whatever is live, live;
+`pnpm exec wrangler rollback` makes the previous version active again (see
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
+
 In an emergency, deploy by hand from the synced main checkout with `pnpm build`
 followed by `pnpm exec wrangler deploy`, then verify the public site and the
 deployed Worker version with

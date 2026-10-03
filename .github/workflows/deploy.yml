@@ -12,8 +12,9 @@
 # ends green with a notice.
 #
 # The checks repeat those of ci.yml (which keeps running beside this workflow): when a check is added
-# there, add it here too, so a deploy waits for it. The deploy is the manual one from the README:
-# `pnpm build`, then `pnpm exec wrangler deploy`. See docs/DEPLOYMENT.md.
+# there, add it here too, so a deploy waits for it (scripts/test-deploy.mjs fails when they differ). The deploy
+# is the manual one from the README: `pnpm build`, then `pnpm exec wrangler deploy`. There is no automatic
+# rollback. See docs/DEPLOYMENT.md.
 name: Deploy
 
 on:
@@ -25,10 +26,11 @@ on:
 permissions:
   contents: read
 
-# One deploy at a time. A queued run is replaced by a newer one, which builds the newer main, so nothing is
-# lost. Pull request runs only cancel each other.
+# One deploy at a time, and every run that can deploy is in the same group. A queued run is replaced by a newer
+# one, which builds the newer main, so nothing is lost. A pull request run, or a manual run on another ref (which
+# cannot deploy), has a group of its own and so can never replace a pending run on main.
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.ref) || 'deploy' }}
+  group: ${{ (github.event_name == 'pull_request' || github.ref != 'refs/heads/main') && format('check-{0}', github.ref) || 'deploy' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -46,15 +48,15 @@ jobs:
       # 'true' when the token and the account id exist (compared here, so the secret is not copied into a step)
       HAS_CREDENTIALS: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && vars.CLOUDFLARE_ACCOUNT_ID != '' }}
     steps:
-      # Actions are pinned the way ci.yml pins them.
-      - uses: actions/checkout@v4
+      # Actions are pinned by full commit SHA (the tag is in the comment): this job holds the Cloudflare token.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
         with:
           version: 9
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: pnpm
@@ -67,7 +69,7 @@ jobs:
       # under its id (the key changes with the pin) and verified before use; when the cache is
       # empty the test fetches the commit, retrying on network errors.
       - name: Cache the pinned meaninggraph/core checkout
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .cache/meaning-sources
           key: meaning-sources-${{ hashFiles('model/*.meaning.yaml') }}
