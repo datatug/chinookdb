@@ -1,5 +1,6 @@
 # OpenVaultDB publisher manifest for the Chinook sample database.
-# Format: draft. Every path below is relative to this file and must exist.
+# Format: draft. Every path below is relative to the repository root (this file is there too)
+# and must be a regular file tracked by git. No secrets belong here.
 format: ovdb-manifest/draft-1
 id: chinook
 title: Chinook music store
@@ -14,7 +15,10 @@ url: https://chinookdb.com/ovdb/dbs/chinook
 deployment:
   url: https://cloud.openvaultdb.com/ovdb/dbs/chinook
   engine: sqlite
-  discovery: https://cloud.openvaultdb.com/.well-known/openvaultdb
+  # The discovery document at the origin of the canonical url; it lists that url.
+  discovery: https://chinookdb.com/.well-known/openvaultdb
+  # Where a recordset's page is. Clients use this template and never build the route themselves.
+  recordset_page: https://cloud.openvaultdb.com/ovdb/dbs/chinook/collections/{name}
 
 model:
   modelspec: model/chinook.modelspec.json
@@ -32,7 +36,11 @@ publisher:
   url: https://github.com/datatug
   repository: https://github.com/datatug/chinookdb
 
+# licences.data is the licence the Directory shows for the database: the data is the upstream
+# Chinook data (Copyright (c) 2008-2024 Luis Rocha), MIT. The model and the meaning file are
+# this repository's own work.
 licences:
+  data: MIT
   model: MIT
   meaning: CC0-1.0
 
