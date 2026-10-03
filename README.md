@@ -205,7 +205,7 @@ ignored file is refused, because the Directory reads the published commit.
   model's address in the ModelSpec registry (see "The two forms of a manifest"
   and "The model address" below);
 - the meaning file, and the MeaningGraph address
-  `meaning://github.com/datatug/chinookdb`, which must match the repository and
+  `meaning://github.com/datatug/chinookdb`, which must name this repository and
   the meaning file's own `id`;
 - the publisher (DataTug) and the licences: `data` (MIT, the upstream Chinook
   data), `model` (MIT) and `meaning` (CC0-1.0). `licences.data` is the licence
@@ -214,11 +214,10 @@ ignored file is refused, because the Directory reads the published commit.
   the deployment serves.
 
 The manifest holds no secrets and claims no capabilities; what the server can
-do comes from its own discovery document. The check refuses unknown keys, URLs
-that are not https, URLs with credentials, a query string or a fragment, and
-URLs that name an IP address or a local host. `pnpm check:ovdb` runs it on
-this repository's `HEAD`; `pnpm test:model` runs it too, and the negative
-cases for both forms.
+do comes from its own discovery document. The checker refuses unknown keys, and
+holds every URL to the Directory's URL rules (see "What the pre-check checks"
+below). `pnpm check:ovdb` runs it on this repository's `HEAD`; `pnpm test:model`
+runs it too, and the negative cases for both forms.
 
 The manifest check fails when `OVDB.md` does not parse, when a file named in
 `OVDB.md` or `ovdb.yaml` is missing or is not a tracked regular file, when
@@ -250,10 +249,9 @@ What `pnpm test:model` reads, and from where:
 ### The two forms of a manifest
 
 The OVDB Directory accepts a manifest in one of two forms, and the checker
-(`scripts/lib/ovdb-manifest.mjs`) accepts exactly those two, with the same rules
-and the same refusals. The forms never mix: a manifest with local model files
-(`model.modelspec` or `model.hcl`) is an own-model manifest, any other is a
-shared-model manifest.
+(`scripts/lib/ovdb-manifest.mjs`) knows both. The forms never mix: a manifest
+with local model files (`model.modelspec` or `model.hcl`) is an own-model
+manifest, any other is a shared-model manifest.
 
 **Own model.** The model and the meaning file are tracked files of the
 publisher's repository, as here: `model.modelspec`, `model.hcl`, `meaning.file`,
@@ -261,10 +259,11 @@ publisher's repository, as here: `model.modelspec`, `model.hcl`, `meaning.file`,
 `model.address` is optional; when given it is the model's address in the
 ModelSpec registry, and for a manifest with its own files it is its own
 repository plus the module name the model file declares, without `?ref=`.
-`meaning.address` and `recordsets_partial` are refused. The checker reads
-everything and checks it all: the recordsets are exactly the model's entities,
-`model.hcl` is the meaning file's `models:` entry, the graph id is the meaning
-file's own.
+`meaning.address` and `recordsets_partial` are refused. The checker reads the
+model JSON and the meaning file, and compares what it reads with the manifest:
+the recordsets are exactly the model's entities, `model.hcl` is the meaning
+file's `models:` entry, the graph id and the licence are the meaning file's own.
+It does not parse the model or the meaning file in full (see below).
 
 **Shared model.** The model and the meaning graph are published in other
 repositories, and the manifest points at them instead of copying them, so that
@@ -277,15 +276,68 @@ and no local meaning file, `model.address` and `meaning.address` both pinned wit
 and `model.name`. Neither address may name the publisher's own repository. See
 [`examples/hoster/`](examples/hoster/) for a complete one.
 
-The checker is offline. For the shared form it validates shape only: it cannot
-read the model or the graph, so the Directory checks both addresses against the
-ModelSpec registry (`github.com/modelspec-org/registry`) and the MeaningGraph
-registry (`github.com/meaninggraph/registry`), reads both repositories at the
-pinned commits and compares the recordsets with the model's entities. The check
-says so in its output (`pnpm check:ovdb` prints a note after a shared manifest).
+### What the pre-check checks, and what it does not
 
-**One grammar for names**, the same in the checker, the registries and the
-Directory:
+The checker (`pnpm check:ovdb`, `scripts/check-ovdb-manifest.mjs`) is an offline
+pre-check. **The OVDB Directory is the authority**: it checks everything again,
+at the commit it reads, and a manifest that passes here can still be refused
+there. Its output says so for both forms of manifest, and lists what is not
+checked. It takes an optional directory (`node scripts/check-ovdb-manifest.mjs
+examples/hoster`); a directory that is not the root of its repository is checked
+as if it were the root, and the output says that the Directory reads `OVDB.md`
+at the root.
+
+It checks, with the Directory's own rules (`scripts/lib/directory-rules.mjs`
+mirrors `openvaultdb/directory` at commit `a4aebb7`, the head of its pull
+request 8, plus two refusals that branch is adding: any port, and any percent
+escape in a path):
+
+- every URL field (`url`, `deployment.url`, `deployment.discovery`,
+  `deployment.recordset_page`, `publisher.url`): public https, written exactly as
+  the URL parser would write it (no trailing dot, no upper-case or non-ASCII
+  host, no empty or dot segment, no whitespace or backslash, no userinfo), no
+  port, no percent escape in the path, no IP address, no local, internal or
+  reserved name (`.local`, `.internal`, `.svc`, `.test`, `.example`, `.onion`,
+  `home.arpa`, ...); the canonical `url` also without a trailing slash and with
+  `ovdb` as a path segment or a subdomain; `{name}` once, in the path only;
+- the `id` (lower-case letters, digits and single hyphens, 80 characters at most)
+  and `deployment.engine` (`[A-Za-z][A-Za-z0-9_.+-]{0,39}`);
+- every file path (`[A-Za-z0-9_.-/]` only, no `..`, `.` or empty segment, no glob),
+  that each named file is tracked at `HEAD`, and the address and pin shapes;
+- for an own model, the model JSON and the meaning file against the manifest
+  (recordsets, `models:` entry, graph id, licence, module name);
+- the keys: an unknown key is refused.
+
+`homepage` is stricter than the Directory's URL rule, and this is what it
+guarantees: at most 200 characters; `https://` and a host of lower-case ASCII
+letters, digits and hyphens in dot-separated labels (at least two, no leading or
+trailing hyphen in a label, no trailing dot), no port and no userinfo; a path of
+only `A-Z a-z 0-9 . _ ~ / -`, with no percent escape, no `//` and no `.` or `..`
+segment. So it is plain text that needs no escaping in an HTML attribute.
+
+It does not check, and the Directory does:
+
+- the full ModelSpec parse of the model (the version, every entity's properties,
+  their types and references);
+- the meaning check with the pinned core checker (concept shapes, bindings,
+  `extends` chains, values);
+- lookups in the ModelSpec registry and the MeaningGraph registry: that the
+  addresses are registered, under the right graph id, with the right files and
+  licences, and that the pinned commits are on the default branches;
+- for a shared model, the comparison of the recordsets with the model's entities
+  (the checker cannot read the model);
+- checks across records: the canonical `url`, the deployment and the recordset
+  page that two databases claim.
+
+It is stricter than the Directory in a few places: the licence ids it accepts
+are the short list in the checker, not any SPDX-shaped id; `meaning.graph.id`,
+`model.name` and the recordset names are checked for shape here and against the
+registries there; and a module name starts with a letter here, where the
+Directory also accepts a leading `_` in an address (the ModelSpec registry does
+not).
+
+**One grammar for names**, the intersection of what the checker, the registries
+and the Directory accept:
 
 - the host of an address is `github.com`;
 - an organisation or a repository is `[A-Za-z0-9_.-]+`, is not `.` or `..`, and a
@@ -294,10 +346,17 @@ Directory:
 - in an address the host, the organisation and the repository are written in
   lower case (GitHub does not tell the cases apart, the registries do), so a
   publisher whose repository is `DataTug/ChinookDB` writes
-  `modelspec://github.com/datatug/chinookdb/<module>`;
+  `modelspec://github.com/datatug/chinookdb/<module>`. The one exception is an
+  own manifest's `meaning.graph.address`: the Directory compares it verbatim with
+  the MeaningGraph registry's record of the graph (which is for this repository
+  in whatever case the registry spells it, and `publisher.repository` may be in any
+  case), so offline the checker only requires it to name this repository, in any
+  case; its exact spelling is the registry's, and the Directory checks it;
 - a module name is a letter followed by letters, digits and `_`, with upper case
   allowed and case-sensitive (`Sales` and `sales` are two modules), never with a
-  dot, because `<address>.<Entity>` is an entity reference;
+  dot, because `<address>.<Entity>` is an entity reference (the Directory's
+  address pattern also lets a name start with `_`; the ModelSpec registry and the
+  references in meaning files do not, so the checker does not);
 - a pin is `?ref=` and 40 lower-case hex characters, nothing else after it.
 
 ### The model address
@@ -325,15 +384,19 @@ copying the model or the meaning graph. Their repository carries only two files,
 example is a shared-model manifest that points at this repository's model and
 meaning graph at the pinned commit `8c9e62e` (which the ModelSpec registry, the
 MeaningGraph registry and the Directory all pin) and whose canonical and
-deployment URLs, publisher and id are placeholders on `example.com`, marked
-`PLACEHOLDER` in the file. To list a database: copy the two files, replace the
-placeholders, commit, check them offline with `node scripts/check-ovdb-manifest.mjs
---repository https://github.com/<you>/<repository> <directory>` (it needs the
-repository to have the files committed: it reads `HEAD`), and open a pull request
-to [`openvaultdb/directory`](https://github.com/openvaultdb/directory) that adds
-one record for the database (repository, commit, manifest path, canonical URL
-and MeaningGraph id `chinook`). The Directory then checks the addresses against
-the two registries and reads both repositories at the pins.
+deployment URLs, publisher and id are placeholders on `example.com` and an
+organisation name with an underscore, which no GitHub account can have, marked
+`PLACEHOLDER` in the file, so that the example cannot be listed as it stands.
+
+To list a database: copy the two files, replace the placeholders, commit, and
+pre-check them offline with `node scripts/check-ovdb-manifest.mjs --repository
+https://github.com/<you>/<repository> <directory>` (it reads `HEAD`, so the files
+must be committed; a pass is not the Directory's verdict, see "What the
+pre-check checks"). Then open a pull request to
+[`openvaultdb/directory`](https://github.com/openvaultdb/directory) that adds one
+record for the database (repository, commit, manifest path, canonical URL and
+MeaningGraph id `chinook`). The Directory then checks the addresses against the
+two registries and reads both repositories at the pins.
 
 ## DataTug Embed and DTQL
 

@@ -1,13 +1,15 @@
 # EXAMPLE: the OpenVaultDB publisher manifest of someone who hosts their own copy of the Chinook sample
 # database. Copy this file and OVDB.md to the root of your own repository and replace every value marked
-# PLACEHOLDER; the rest is what makes the database a Chinook database and stays as it is.
+# PLACEHOLDER; the rest is what makes the database a Chinook database and stays as it is. It must not be
+# listed in the Directory as it stands: the organisation `example_org` has an underscore, which no GitHub
+# account can have, and every host is on example.com, so the placeholders cannot be someone's real ones.
 #
 # This is the "shared" form of the manifest: there are no model files and no meaning file in your repository.
 # The model and the meaning graph are published in github.com/datatug/chinookdb, and are named by address,
 # each pinned with ?ref=<40 hex> to the commit that is read. Every hoster of Chinook points at the same two
 # addresses, so every one of them is a database of the same model.
 #
-# Offline check:   node scripts/check-ovdb-manifest.mjs --repository https://github.com/example-co/chinook-hosting <directory>
+# Offline check:   node scripts/check-ovdb-manifest.mjs --repository https://github.com/example_org/chinook-hosting <directory>
 # (it checks the shape only; the Directory checks the addresses against the ModelSpec and MeaningGraph registries.)
 format: ovdb-manifest/draft-1
 
@@ -50,11 +52,12 @@ meaning:
     # The MeaningGraph registry's id for that graph.
     id: chinook
 
-# PLACEHOLDER: you, the publisher. The repository is the one that carries this file, on github.com.
+# PLACEHOLDER: you, the publisher. The repository is the one that carries this file, on github.com. (An
+# organisation name with an underscore is not a name GitHub can issue: replace it with yours.)
 publisher:
   name: Example Co
-  url: https://github.com/example-co
-  repository: https://github.com/example-co/chinook-hosting
+  url: https://github.com/example_org
+  repository: https://github.com/example_org/chinook-hosting
 
 # licences.data is the licence of the data you serve, and the one the Directory shows for your database. The
 # upstream Chinook data (Copyright (c) 2008-2024 Luis Rocha) is MIT; change it only if your copy is different.

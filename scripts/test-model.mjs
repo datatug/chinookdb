@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { cleanGitEnv } from './lib/git-env.mjs';
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { canonicalUrlProblem, enginePattern, homepageProblem, idPattern, maxIdLength, publicHttpsProblem } from './lib/directory-rules.mjs';
+import { cleanGitEnv, isolatedGitEnv } from './lib/git-env.mjs';
+import { appendFileSync, chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -10,7 +11,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { listDataFiles, listTrackedFiles, verifyChecksums } from './lib/checksums.mjs';
 import { checkMeaning, checkoutGit, coreRepo, createResolver, effectiveValues, indexConcepts, loadMeaningDir, matchValues, parseConceptRef, parseModelRef, pinsOf, valueCoverageProblems } from './lib/meaning.mjs';
 import { compareModelWithData, parseHcl, toModelspecJson, validateModel } from './lib/modelspec.mjs';
-import { checkOvdbManifest, gitRepoFiles, parseFrontmatter, reportOvdbManifest } from './lib/ovdb-manifest.mjs';
+import { checkOvdbManifest, gitRepoFiles, offlineNote, parseFrontmatter, reportOvdbManifest } from './lib/ovdb-manifest.mjs';
 import { buildModelJson, chinookModule, listModelFiles, modelChecksumsPath, modelDir } from './generate-model.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -22,9 +23,15 @@ const data = JSON.parse(read('public/data/chinook.json'));
 const meaningPath = 'model/chinook.meaning.yaml';
 const meaning = parseYaml(read(meaningPath));
 const selfRepo = 'github.com/datatug/chinookdb';
+// Every process this file starts gets an environment without GIT_* variables (git sets GIT_DIR and
+// GIT_INDEX_FILE for a hook it runs from a linked worktree) and without the configuration of the machine
+// (a global commit.gpgsign or core.hooksPath must neither break nor run inside the suite): see isolatedGitEnv.
+// Every git call names its repository with -C.
+const exec = (command, args, options = {}) => execFileSync(command, args, { ...options, env: isolatedGitEnv() });
+const plainRun = (command, args) => exec(command, args, { stdio: 'pipe' }).toString();
 // The universal concepts and the schema come from one checkout of meaninggraph/core at the
 // commit that the meaning file's references pin; the resolver returns its directory.
-const resolve = createResolver({ root });
+const resolve = createResolver({ root, run: plainRun });
 after(() => resolve.dispose());
 const [corePin] = pinsOf(meaning, coreRepo);
 const coreIndex = resolve(coreRepo, corePin);
@@ -37,9 +44,6 @@ const coreUrl = `meaning://${coreRepo}`;
 const coreRef = (id, pin = corePin) => `${coreUrl}/${id}?ref=${pin}`;
 
 // Where the network is not the point, a local git repository stands in for github.com.
-// Every process this file starts gets an environment without GIT_* variables (git sets GIT_DIR and
-// GIT_INDEX_FILE for a hook it runs from a linked worktree), and every git call names its repository with -C.
-const exec = (command, args, options = {}) => execFileSync(command, args, { ...options, env: cleanGitEnv() });
 const scratch = mkdtempSync(join(tmpdir(), 'model-meaning-'));
 after(() => rmSync(scratch, { recursive: true, force: true }));
 let scratchCount = 0;
@@ -50,12 +54,11 @@ function localOrigin(files) {
   gitIn(dir, 'init', '-q', '-b', 'main');
   for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
   gitIn(dir, 'add', '.');
-  gitIn(dir, '-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'files');
+  gitIn(dir, '-c', 'user.name=test', '-c', 'user.email=test@example.com', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'files');
   return { dir, url: `file://${dir}`, sha: gitIn(dir, 'rev-parse', 'HEAD') };
 }
-const plainRun = (command, args) => exec(command, args, { stdio: 'pipe' }).toString();
 // A resolver that reads the universal concepts' address from a local repository instead of github.com.
-const localResolver = (url, repo = coreRepo) => createResolver({ root, sources: { [repo]: { git: url } }, cacheDir: join(scratch, `cache-${scratchCount++}`) });
+const localResolver = (url, repo = coreRepo) => createResolver({ root, sources: { [repo]: { git: url } }, cacheDir: join(scratch, `cache-${scratchCount++}`), run: plainRun });
 const permanent = /(not our ref|couldn't find remote ref)/;
 
 test('the ModelSpec JSON and the model checksums are generated from the current sources', async () => {
@@ -320,7 +323,7 @@ test('a cached checkout is made the pinned commit again before it is reused, or 
     'a modified tracked file': (k) => appendFileSync(join(k, 'a.meaning.yaml'), '# POISON\n'),
     'a modified file hidden by skip-worktree': (k) => { own(k, 'update-index', '--skip-worktree', 'a.meaning.yaml'); appendFileSync(join(k, 'a.meaning.yaml'), '# POISON\n'); },
     'a modified file hidden by assume-unchanged': (k) => { own(k, 'update-index', '--assume-unchanged', 'a.meaning.yaml'); appendFileSync(join(k, 'a.meaning.yaml'), '# POISON\n'); },
-    'a meaning file hidden by .git/info/exclude': (k) => { appendFileSync(join(k, '.git', 'info', 'exclude'), 'evil.meaning.yaml\n'); writeFileSync(join(k, 'evil.meaning.yaml'), 'POISON\n'); },
+    'a meaning file hidden by .git/info/exclude': (k) => { mkdirSync(join(k, '.git', 'info'), { recursive: true }); appendFileSync(join(k, '.git', 'info', 'exclude'), 'evil.meaning.yaml\n'); writeFileSync(join(k, 'evil.meaning.yaml'), 'POISON\n'); },
     'a meaning file hidden by core.excludesFile': (k) => { writeFileSync(join(k, '.git', 'ignore-all'), '*.extra.meaning.yaml\n'); own(k, 'config', 'core.excludesFile', join(k, '.git', 'ignore-all')); writeFileSync(join(k, 'x.extra.meaning.yaml'), 'POISON\n'); },
     'a file removed from a sparse checkout': (k) => { own(k, 'config', 'core.sparseCheckout', 'true'); mkdirSync(join(k, '.git', 'info'), { recursive: true }); writeFileSync(join(k, '.git', 'info', 'sparse-checkout'), 'b.meaning.yaml\n'); own(k, 'read-tree', '-mu', 'HEAD'); },
     'a deleted file': (k) => rmSync(join(k, 'a.meaning.yaml')),
@@ -364,7 +367,7 @@ test('two processes filling one cache entry both get the verified directory', ()
     const out = plainRun(command, args);
     if (args.includes('checkout') && !raced) {
       raced = true;
-      const work = args[1];
+      const work = args[args.indexOf('-C') + 1];
       exec('git', ['clone', '-q', work, kept], { stdio: 'pipe' });
     }
     return out;
@@ -400,7 +403,7 @@ test('processes that fill, read and repair one cache entry at the same time all 
 const [url, sha, cacheDir] = process.argv.slice(1);
 process.stdout.write(checkoutGit(url, sha, { cacheDir }).dir);`;
   const together = (count) => Promise.all(Array.from({ length: count }, () => new Promise((resolve) => {
-    const child = spawn(process.execPath, ['--input-type=module', '-e', loader, url, sha, cacheDir], { env: cleanGitEnv(), stdio: 'pipe' });
+    const child = spawn(process.execPath, ['--input-type=module', '-e', loader, url, sha, cacheDir], { env: isolatedGitEnv(), stdio: 'pipe' });
     let out = '';
     let err = '';
     child.stdout.on('data', (chunk) => { out += chunk; });
@@ -436,7 +439,7 @@ test('an entry that is already the commit is only read, and a lock another proce
   calls.length = 0;
   assert.equal(checkoutGit(url, sha, { cacheDir, run }).dir, kept);
   assert.ok(calls.length > 0);
-  assert.deepEqual(calls.filter((args) => args.some((arg) => ['read-tree', 'checkout-index', 'clean', 'fetch', 'init'].includes(arg))), [], 'nothing is written to an entry that is already the commit');
+  assert.deepEqual(calls.filter((args) => args.some((arg) => ['read-tree', 'checkout-index', 'fetch', 'init'].includes(arg)) || (args.includes('clean') && !args.includes('-n'))), [], 'nothing is written to an entry that is already the commit');
   assert.ok(calls.filter((args) => args.includes('status')).every((args) => args.includes('--no-optional-locks')), 'and the status check takes no optional lock');
   // git fails once on the index lock another process holds: the entry is looked at again, not thrown away.
   let locks = 0;
@@ -457,7 +460,7 @@ test('an entry that is already the commit is only read, and a lock another proce
   const racing = (command, args) => {
     if (args.includes('status') && args.some((arg) => arg.startsWith(kept2)) && lockFailures < 2) { lockFailures += 1; throw Object.assign(new Error('git failed'), { stderr: Buffer.from('fatal: Unable to create index.lock') }); }
     const out = plainRun(command, args);
-    if (args.includes('checkout') && !raced) { raced = true; exec('git', ['clone', '-q', args[1], kept2], { stdio: 'pipe' }); }
+    if (args.includes('checkout') && !raced) { raced = true; exec('git', ['clone', '-q', args[args.indexOf('-C') + 1], kept2], { stdio: 'pipe' }); }
     return out;
   };
   const { dir } = checkoutGit(url, sha, { cacheDir: cacheDir2, run: racing });
@@ -474,6 +477,198 @@ test('an entry that is already the commit is only read, and a lock another proce
   assert.equal(checkoutGit(url, sha, { cacheDir: cacheDir3, run: plainRun }).dir, kept3);
   assert.ok(!existsSync(join(kept3, '.git', 'marker')), 'the old entry was replaced');
   assert.deepEqual(readdirSync(cacheDir3), [sha], 'and the discarded one is gone');
+});
+
+test('every git call of checkoutGit is hardened, and a cache entry cannot make git run its commands or read other objects', () => {
+  const { url, sha } = localOrigin({ 'a.meaning.yaml': 'format: meaning/draft-1\n' });
+  const hardening = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.useReplaceRefs=false'];
+  // The calls: the flags in front of every one, no template for the new repository, and a url, ref or path only after --end-of-options.
+  const cacheDir = join(scratch, `cache-${scratchCount++}`);
+  const calls = [];
+  const spy = (command, args) => { calls.push(args); return plainRun(command, args); };
+  checkoutGit(url, sha, { cacheDir, run: spy });
+  assert.ok(calls.length >= 6);
+  for (const args of calls) assert.deepEqual(args.slice(0, hardening.length), hardening, args.join(' '));
+  const init = calls.find((args) => args.includes('init'));
+  assert.ok(init.includes('--template=') && init.indexOf('--end-of-options') > init.indexOf('--template=') && init.indexOf('--end-of-options') === init.length - 2, 'init: --template=, then --end-of-options, then the directory');
+  const fetch = calls.find((args) => args.includes('fetch'));
+  assert.deepEqual(fetch.slice(fetch.indexOf('--end-of-options')), ['--end-of-options', url, sha], 'fetch: the url and the ref only after --end-of-options');
+  assert.deepEqual(calls.find((args) => args.includes('checkout')).slice(-2), ['--end-of-options', 'FETCH_HEAD']);
+  const kept = join(cacheDir, sha);
+  assert.ok(!existsSync(join(kept, '.git', 'hooks')), 'a repository made without a template has no sample hooks');
+
+  // core.fsmonitor in the entry's own config: git status would run the command. Positive control first.
+  const marker = join(scratch, `fsmonitor-ran-${scratchCount++}`);
+  const monitor = join(scratch, `fsmonitor-${scratchCount++}.sh`);
+  writeFileSync(monitor, `#!/bin/sh\ntouch "${marker}"\nexit 0\n`, { mode: 0o755 });
+  gitIn(kept, 'config', 'core.fsmonitor', monitor);
+  try { plainRun('git', ['-C', kept, 'status', '--porcelain']); } catch { /* the command's answer is not the point */ }
+  assert.ok(existsSync(marker), 'control: git status in the planted entry does run the command');
+  rmSync(marker);
+  assert.equal(checkoutGit(url, sha, { cacheDir, run: plainRun }).dir, kept);
+  assert.ok(!existsSync(marker), 'checkoutGit never runs core.fsmonitor');
+
+  // A replace ref in the entry: git would read another commit's tree for HEAD and "repair" the entry from it.
+  const other = localOrigin({ 'a.meaning.yaml': 'POISON\n' });
+  gitIn(kept, 'config', '--unset', 'core.fsmonitor');
+  gitIn(kept, 'fetch', '-q', other.url, other.sha);
+  gitIn(kept, 'replace', sha, other.sha);
+  assert.notEqual(gitIn(kept, 'status', '--porcelain'), '', 'control: with the replace ref git reads the other commit as HEAD');
+  assert.equal(checkoutGit(url, sha, { cacheDir, run: plainRun }).dir, kept);
+  assert.equal(readFileSync(join(kept, 'a.meaning.yaml'), 'utf8'), 'format: meaning/draft-1\n', 'the replace ref did not change what the entry holds');
+
+  // A hook: a core.hooksPath from the machine's own configuration, with a post-checkout hook that a fresh checkout would run.
+  const hooks = join(scratch, `hooks-${scratchCount++}`);
+  const hookMarker = join(scratch, `hook-ran-${scratchCount++}`);
+  const globalConfig = join(scratch, `global-config-${scratchCount++}`);
+  mkdirSync(hooks);
+  writeFileSync(join(hooks, 'post-checkout'), `#!/bin/sh\ntouch "${hookMarker}"\n`, { mode: 0o755 });
+  writeFileSync(globalConfig, `[core]\n\thooksPath = ${hooks}\n`);
+  const withHooks = (command, args) => execFileSync(command, args, { env: { ...isolatedGitEnv(), GIT_CONFIG_GLOBAL: globalConfig }, stdio: 'pipe' }).toString();
+  const control = join(scratch, `hook-control-${scratchCount++}`);
+  mkdirSync(control);
+  withHooks('git', ['-C', control, 'init', '-q', '-b', 'main']);
+  withHooks('git', ['-C', control, 'fetch', '-q', url, sha]);
+  withHooks('git', ['-C', control, 'checkout', '-q', 'FETCH_HEAD']);
+  assert.ok(existsSync(hookMarker), 'control: git runs the post-checkout hook of core.hooksPath');
+  rmSync(hookMarker);
+  checkoutGit(url, sha, { cacheDir: join(scratch, `cache-${scratchCount++}`), run: withHooks });
+  assert.ok(!existsSync(hookMarker), 'a fresh checkout runs no hook');
+});
+
+test('a cache entry that is a symbolic link is replaced, and what it points at is never touched', () => {
+  const { url, sha } = localOrigin({ 'a.meaning.yaml': 'format: meaning/draft-1\n' });
+  const elsewhere = join(scratch, `elsewhere-${scratchCount++}`);
+  exec('git', ['clone', '-q', url, elsewhere], { stdio: 'pipe' });
+  appendFileSync(join(elsewhere, 'a.meaning.yaml'), 'LOCAL EDIT\n');
+  writeFileSync(join(elsewhere, 'precious.txt'), 'untracked and precious');
+  const intact = () => {
+    assert.equal(readFileSync(join(elsewhere, 'a.meaning.yaml'), 'utf8'), 'format: meaning/draft-1\nLOCAL EDIT\n', 'the target\'s edit survives');
+    assert.equal(readFileSync(join(elsewhere, 'precious.txt'), 'utf8'), 'untracked and precious', 'the target\'s untracked file survives');
+  };
+  // The entry itself is a link to a checkout of the same commit.
+  const cacheDir = join(scratch, `cache-${scratchCount++}`);
+  mkdirSync(cacheDir);
+  symlinkSync(elsewhere, join(cacheDir, sha));
+  const { dir } = checkoutGit(url, sha, { cacheDir, run: plainRun });
+  assert.equal(dir, join(cacheDir, sha));
+  assert.ok(lstatSync(dir).isDirectory() && !lstatSync(dir).isSymbolicLink(), 'a real directory now');
+  assert.equal(readFileSync(join(dir, 'a.meaning.yaml'), 'utf8'), 'format: meaning/draft-1\n');
+  intact();
+  // A dangling link, and a plain file, in the entry's place.
+  for (const [name, make] of [['dangling link', (path) => symlinkSync(join(scratch, 'nowhere'), path)], ['file', (path) => writeFileSync(path, 'x')]]) {
+    const cache = join(scratch, `cache-${scratchCount++}`);
+    mkdirSync(cache);
+    make(join(cache, sha));
+    assert.ok(lstatSync(checkoutGit(url, sha, { cacheDir: cache, run: plainRun }).dir).isDirectory(), name);
+    assert.deepEqual(readdirSync(cache), [sha], name);
+  }
+  // The entry is a real directory but its .git is a link to the other checkout's .git.
+  const cache3 = join(scratch, `cache-${scratchCount++}`);
+  mkdirSync(join(cache3, sha), { recursive: true });
+  symlinkSync(join(elsewhere, '.git'), join(cache3, sha, '.git'));
+  const replaced = checkoutGit(url, sha, { cacheDir: cache3, run: plainRun }).dir;
+  assert.ok(lstatSync(join(replaced, '.git')).isDirectory() && !lstatSync(join(replaced, '.git')).isSymbolicLink());
+  assert.deepEqual(readdirSync(cache3), [sha]);
+  intact();
+  assert.equal(gitIn(elsewhere, 'rev-parse', 'HEAD'), sha, 'and the target repository still has its HEAD');
+});
+
+test('an entry is removed only when this process examined it and condemned it', () => {
+  const { url, sha } = localOrigin({ 'a.meaning.yaml': 'format: meaning/draft-1\n' });
+  const cacheDir = join(scratch, `cache-${scratchCount++}`);
+  const kept = join(cacheDir, sha);
+  checkoutGit(url, sha, { cacheDir, run: plainRun });
+  // The entry is broken (HEAD names nothing), so this process condemns it ...
+  writeFileSync(join(kept, '.git', 'HEAD'), 'ref: refs/heads/nowhere\n');
+  const calls = [];
+  const run = (command, args) => { calls.push(args); return plainRun(command, args); };
+  // ... and between the verdict and the removal another process replaces it with a good entry and starts reading it.
+  let replaced = 0;
+  const onCondemned = (dir) => {
+    assert.equal(dir, kept);
+    replaced += 1;
+    renameSync(kept, join(scratch, `broken-${scratchCount++}`));
+    exec('git', ['clone', '-q', url, kept], { stdio: 'pipe' });
+    writeFileSync(join(kept, '.git', 'marker'), 'the good entry another process is reading');
+  };
+  const { dir } = checkoutGit(url, sha, { cacheDir, run, onCondemned, retryDelayMs: 1 });
+  assert.equal(replaced, 1);
+  assert.equal(dir, kept);
+  assert.equal(readFileSync(join(kept, '.git', 'marker'), 'utf8'), 'the good entry another process is reading', 'the good entry was not removed');
+  assert.equal(readFileSync(join(kept, 'a.meaning.yaml'), 'utf8'), 'format: meaning/draft-1\n');
+  assert.deepEqual(calls.filter((args) => args.includes('fetch')), [], 'it was adopted, not fetched again');
+  assert.deepEqual(readdirSync(cacheDir), [sha], 'and nothing is left aside');
+
+  // The condemned entry itself is removed, and the replacement is fetched.
+  writeFileSync(join(kept, '.git', 'HEAD'), 'ref: refs/heads/nowhere\n');
+  writeFileSync(join(kept, '.git', 'marker'), 'the condemned entry');
+  checkoutGit(url, sha, { cacheDir, run: plainRun });
+  assert.ok(!existsSync(join(kept, '.git', 'marker')));
+  assert.deepEqual(readdirSync(cacheDir), [sha]);
+
+  // A rename that fails is reported as what it is, not swallowed: here the cache directory cannot be written to.
+  writeFileSync(join(kept, '.git', 'HEAD'), 'ref: refs/heads/nowhere\n');
+  chmodSync(cacheDir, 0o555);
+  try {
+    assert.throws(() => checkoutGit(url, sha, { cacheDir, run: plainRun, retryDelayMs: 1 }), /cannot move the unusable cache entry .* aside: .*(EACCES|EPERM)/);
+  } finally {
+    chmodSync(cacheDir, 0o755);
+  }
+  assert.ok(existsSync(kept), 'and the entry stays where it was');
+});
+
+test('leftovers of a crash are swept from the cache: discarded entries, and work directories nobody has touched for an hour', () => {
+  const { url, sha } = localOrigin({ 'a.meaning.yaml': 'format: meaning/draft-1\n' });
+  const cacheDir = join(scratch, `cache-${scratchCount++}`);
+  checkoutGit(url, sha, { cacheDir, run: plainRun });
+  for (const name of ['.discard-1-x', '.meaning-source-old', '.meaning-source-fresh']) {
+    mkdirSync(join(cacheDir, name));
+    writeFileSync(join(cacheDir, name, 'file'), 'x');
+  }
+  const longAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+  utimesSync(join(cacheDir, '.meaning-source-old'), longAgo, longAgo);
+  assert.equal(checkoutGit(url, sha, { cacheDir, run: plainRun }).dir, join(cacheDir, sha));
+  assert.deepEqual(readdirSync(cacheDir).sort(), ['.meaning-source-fresh', sha].sort(), 'a work directory that may be in use stays');
+  assert.equal(checkoutGit(url, sha, { cacheDir, run: plainRun, staleMs: -1 }).dir, join(cacheDir, sha));
+  assert.deepEqual(readdirSync(cacheDir), [sha]);
+});
+
+test('the suite\'s git calls ignore the configuration of the machine: a global commit.gpgsign or core.hooksPath neither breaks nor runs', () => {
+  const home = join(scratch, `home-${scratchCount++}`);
+  const hooks = join(scratch, `global-hooks-${scratchCount++}`);
+  const ran = join(scratch, `global-hook-ran-${scratchCount++}`);
+  mkdirSync(home);
+  mkdirSync(hooks);
+  writeFileSync(join(hooks, 'pre-commit'), `#!/bin/sh\ntouch "${ran}"\n`, { mode: 0o755 });
+  writeFileSync(join(home, '.gitconfig'), `[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = /usr/bin/false\n[core]\n\thooksPath = ${hooks}\n`);
+  const saved = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL };
+  Object.assign(process.env, { HOME: home, XDG_CONFIG_HOME: join(home, '.config') });
+  delete process.env.GIT_CONFIG_GLOBAL;
+  try {
+    // Control: a plain git, with this environment but not the suite's, is broken by the decoy and runs its hook.
+    const repo = join(scratch, `decoy-config-${scratchCount++}`);
+    mkdirSync(repo);
+    execFileSync('git', ['-C', repo, 'init', '-q', '-b', 'main'], { env: cleanGitEnv(), stdio: 'pipe' });
+    assert.throws(() => execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-q', '--allow-empty', '-m', 'x'], { env: cleanGitEnv(), stdio: 'pipe' }), 'control: the decoy config breaks a commit');
+    assert.ok(existsSync(ran), 'control: and the global hook ran');
+    rmSync(ran);
+    // The suite's helpers: the same operations work, and no hook runs.
+    const origin = localOrigin({ 'a.meaning.yaml': 'format: meaning/draft-1\n' });
+    commitAs(origin.dir, '-m', 'another');
+    assert.match(gitIn(origin.dir, 'log', '--format=%s', '-1'), /another/);
+    const cacheDir = join(scratch, `cache-${scratchCount++}`);
+    checkoutGit(origin.url, origin.sha, { cacheDir, run: plainRun });
+    assert.ok(!existsSync(ran), 'no global hook ran in the suite');
+    assert.equal(isolatedGitEnv().GIT_CONFIG_GLOBAL, '/dev/null');
+    assert.equal(isolatedGitEnv().GIT_CONFIG_NOSYSTEM, '1');
+    assert.equal(isolatedGitEnv({ GIT_DIR: '/x', PATH: process.env.PATH }).GIT_DIR, undefined, 'and the GIT_* variables of a hook are still dropped');
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
 });
 
 // A repository that writes its own concepts with its own address, the way core's FORMAT.md allows.
@@ -697,7 +892,7 @@ test('a binding can match stored values by a code instead of by name', () => {
 // scratch repository that holds copies of the manifest files, a directory, a symlink, and untracked
 // and ignored files. A case commits its changed files, checks, and then drops that commit.
 const manifestRepository = `https://${selfRepo}`;
-const commitAs = (dir, ...args) => gitIn(dir, '-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-q', '--allow-empty', ...args);
+const commitAs = (dir, ...args) => gitIn(dir, '-c', 'user.name=test', '-c', 'user.email=test@example.com', '-c', 'commit.gpgsign=false', 'commit', '-q', '--allow-empty', ...args);
 const manifestRepo = (() => {
   const dir = join(scratch, `manifest-repo-${scratchCount++}`);
   mkdirSync(join(dir, 'model'), { recursive: true });
@@ -751,8 +946,7 @@ const sharedDoc = (change = () => {}) => {
   delete doc.model.modelspec;
   delete doc.model.hcl;
   doc.id = 'chinook-acme';
-  doc.url = 'https://ovdb.acme.com/dbs/chinook';
-  doc.deployment = { url: 'https://cloud.acme.com/ovdb/dbs/chinook', engine: 'postgres', discovery: 'https://ovdb.acme.com/.well-known/openvaultdb', recordset_page: 'https://cloud.acme.com/ovdb/dbs/chinook/collections/{name}' };
+  doc.deployment = { ...doc.deployment, engine: 'postgres' };
   doc.model = { address: `modelspec://${selfRepo}/chinook?ref=${sharedPin}` };
   doc.meaning = { file: 'model/chinook.meaning.yaml', address: `meaning://${selfRepo}?ref=${sharedPin}`, graph: { id: 'chinook' } };
   doc.publisher = { name: 'Acme', url: 'https://github.com/acme', repository: hosterRepository };
@@ -764,6 +958,16 @@ const sharedDoc = (change = () => {}) => {
 // looks at the manifest only. `repository` is the publisher's repository the manifest must say it is in.
 const sharedManifest = (change, options = { repository: hosterRepository }) => manifestProblems({ 'ovdb.yaml': stringifyYaml(sharedDoc(change)) }, options);
 const sharedReport = (change, options = { repository: hosterRepository }) => manifestReport({ 'ovdb.yaml': stringifyYaml(sharedDoc(change)) }, options);
+// The same checks without a commit per case, for tests with hundreds of cases: the files are in memory (this repository's
+// own, and the manifest being tried), and every one counts as a tracked regular file.
+const memoryProblems = (doc, options = { repository: undefined }) => {
+  const held = new Map(['OVDB.md', 'model/chinook.modelspec.json', 'model/chinook.modelspec.hcl', 'model/chinook.meaning.yaml'].map((path) => [path, read(path)]));
+  held.set('ovdb.yaml', stringifyYaml(doc));
+  const files = { problem: () => '', kind: (path) => (held.has(path) ? 'file' : 'missing'), read: (path) => held.get(path) };
+  return checkOvdbManifest(files, options).join('\n');
+};
+const ownProblems = (change) => memoryProblems((() => { const doc = manifestDoc(); change(doc); return doc; })());
+const hosterProblems = (change) => memoryProblems(sharedDoc(change));
 const withFrontmatter = (publish, extra = '') => manifestProblems({ 'OVDB.md': `---\novdb: 1\npublish: ${publish}\n${extra}---\n` });
 
 test('OVDB.md and ovdb.yaml in this repository are a valid publisher manifest', () => {
@@ -818,18 +1022,18 @@ test('every file the manifest names must be a regular file that git tracks at HE
 test('the manifest holds identities and URLs a client can trust, and nothing else', () => {
   const url = (field, value) => withManifest((m) => { const [a, b] = field.split('.'); if (b) m[a][b] = value; else m[a] = value; });
   assert.match(withManifest((m) => { delete m.url; }), /url is required/);
-  assert.match(url('url', 'http://chinookdb.com/ovdb/dbs/chinook'), /url must be an https URL/);
-  assert.match(url('url', 'https://user:s3cret@chinookdb.com/ovdb/dbs/chinook'), /url must not carry credentials/);
-  assert.match(url('url', 'https://chinookdb.com/ovdb/dbs/chinook?token=abc123'), /url must not carry a query string or fragment/);
-  assert.match(url('url', 'https://chinookdb.com/ovdb/dbs/chinook#x'), /url must not carry a query string or fragment/);
-  assert.match(url('url', 'https://127.0.0.1/ovdb/dbs/chinook'), /url must name a host, not an IP address/);
-  assert.match(url('url', 'https://169.254.169.254/ovdb/dbs/chinook'), /url must name a host, not an IP address/);
-  assert.match(url('url', 'https://[::1]/ovdb/dbs/chinook'), /url must name a host, not an IP address/);
-  assert.match(url('url', 'https://localhost/ovdb/dbs/chinook'), /url must be a public host/);
-  assert.match(url('url', 'https://metadata.google.internal/ovdb/dbs/chinook'), /url must be a public host/);
-  assert.match(url('url', 'https://chinookdb.com/dbs/chinook'), /url must have an ovdb path segment or an ovdb subdomain/);
+  assert.match(url('url', 'http://chinookdb.com/ovdb/dbs/chinook'), /url must be https, not http/);
+  assert.match(url('url', 'https://user:s3cret@chinookdb.com/ovdb/dbs/chinook'), /url must not contain credentials/);
+  assert.match(url('url', 'https://chinookdb.com/ovdb/dbs/chinook?token=abc123'), /url must not contain a query/);
+  assert.match(url('url', 'https://chinookdb.com/ovdb/dbs/chinook#x'), /url must not contain a fragment/);
+  assert.match(url('url', 'https://127.0.0.1/ovdb/dbs/chinook'), /url 127.0.0.1 is an IP address; a public mapping names a host/);
+  assert.match(url('url', 'https://169.254.169.254/ovdb/dbs/chinook'), /is an IP address/);
+  assert.match(url('url', 'https://[::1]/ovdb/dbs/chinook'), /is an IP address/);
+  assert.match(url('url', 'https://localhost/ovdb/dbs/chinook'), /url localhost is a single-label name/);
+  assert.match(url('url', 'https://metadata.google.internal/ovdb/dbs/chinook'), /local, internal or reserved name \(\.internal\)/);
+  assert.match(url('url', 'https://chinookdb.com/dbs/chinook'), /url must have ovdb as a complete path segment or as a subdomain/);
   assert.equal(url('url', 'https://ovdb.example.com/dbs/chinook').includes('url must have'), false, 'an ovdb subdomain is enough');
-  assert.match(url('deployment.url', 'http://cloud.openvaultdb.com/ovdb/dbs/chinook'), /deployment.url must be an https URL/);
+  assert.match(url('deployment.url', 'http://cloud.openvaultdb.com/ovdb/dbs/chinook'), /deployment.url must be https, not http/);
   assert.match(withManifest((m) => { delete m.deployment.engine; }), /deployment.engine is required/);
   assert.match(withManifest((m) => { m.api_key = 'sk-live-123'; }), /unknown keys: api_key/);
   assert.match(withManifest((m) => { m.deployment.token = 'abc'; }), /unknown deployment.keys: token/);
@@ -840,16 +1044,114 @@ test('the manifest holds identities and URLs a client can trust, and nothing els
 
 test('homepage is an optional public https URL, in both forms, and need not be on the canonical origin', () => {
   assert.equal(manifestDoc().homepage, 'https://chinookdb.com/');
-  for (const url of ['https://chinookdb.com/', 'https://www.example.com/chinook/', 'https://other-site.org/a/b']) {
+  for (const url of ['https://chinookdb.com/', 'https://www.example.com/chinook/', 'https://other-site.org/a/b', 'https://a-b.c-d.example.org/x_y/z.html', 'https://example.com/~me/Chinook-1.0/']) {
     assert.equal(withManifest((m) => { m.homepage = url; }), '', url);
     assert.equal(sharedManifest((m) => { m.homepage = url; }), '', `shared ${url}`);
   }
   assert.equal(withManifest((m) => { delete m.homepage; }), '', 'it is optional');
   assert.equal(sharedManifest((m) => { delete m.homepage; }), '');
-  for (const bad of ['http://chinookdb.com/', 'ftp://chinookdb.com/', 'chinookdb.com', 'https://user:pw@chinookdb.com/', 'https://chinookdb.com/?x=1', 'https://chinookdb.com/#top',
-    'https://127.0.0.1/', 'https://10.0.0.1/', 'https://[::1]/', 'https://localhost/', 'https://intranet.corp/', 'https://printer.internal/', 'https://host.local/', 5, '', null, ['https://chinookdb.com/']]) {
-    for (const [name, check] of [['own', withManifest], ['shared', sharedManifest]]) {
-      assert.match(check((m) => { m.homepage = bad; }), /homepage (is required|must be|must not|must name|must be a public)/, `${name} homepage ${JSON.stringify(bad)}`);
+  const refused = (value) => [['own', ownProblems], ['shared', hosterProblems]].map(([name, check]) => [name, check((m) => { m.homepage = value; })]);
+  for (const bad of [
+    // what the Directory's URL rules refuse
+    'http://chinookdb.com/', 'ftp://chinookdb.com/', 'chinookdb.com', 'https:example.org', 'https://user:pw@chinookdb.com/', 'https://@chinookdb.com/', 'https://chinookdb.com/?x=1', 'https://chinookdb.com/#top',
+    'https://127.0.0.1/', 'https://10.0.0.1/', 'https://[::1]/', 'https://[::ffff:7f00:1]/', 'https://0x7f.1/', 'https://2130706433/', 'https://localhost/', 'https://intranet.corp/', 'https://printer.internal/', 'https://host.local/',
+    'https://printer.local./', 'https://metadata.google.internal./', 'https://grafana.monitoring.svc/', 'https://staging.test/', 'https://x.onion/', 'https://x.intranet/', 'https://x.private/', 'https://x.home.arpa/',
+    'https://example.org/ ', ' https://example.org/', '\nhttps://example.org/', 'https://exam\tple.org/', 'https://chinookdb.com\\@evil.example.org/', 'https://Example.org/', 'https://bücher.example/', 'https://example.org', 'https://example.org//x', 'https://example.org/a/../b',
+    // what only homepage refuses: quotes, ports, escapes, odd hosts and paths, length
+    'https://x"onmouseover="alert(1)"y=".example.com/', "https://example.com/'onmouseover='alert(1)'y='", 'https://example.com/"x', 'https://example.com/<x>', 'https://example.com/a b', 'https://example.com/a,b', 'https://example.com/a;b', 'https://example.com/a=b', 'https://example.com/a&b', 'https://example.com/a@b',
+    'https://example.com:8443/', 'https://example.com:443/', 'https://example.com:/', 'https://example.com/a%2Fb', 'https://example.com/%41', 'https://example.com/a%20b', 'https://example.com/%2e%2e/x',
+    'https://-a.example.com/', 'https://a-.example.com/', 'https://a..example.com/', 'https://exa_mple.com/', 'https://EXAMPLE.com/', 'https://example/', 'https://xn--bcher-kva.example.com/\u00e9',
+    5, '', null, ['https://chinookdb.com/'], { url: 'https://chinookdb.com/' }, true,
+  ]) {
+    for (const [name, problems] of refused(bad)) assert.match(problems, /homepage /, `${name} homepage ${JSON.stringify(bad)}`);
+  }
+  // The two attribute-injection values are refused by the rule that is not the Directory's, and say so.
+  assert.match(sharedManifest((m) => { m.homepage = 'https://x"onmouseover="alert(1)"y=".example.com/'; }), /homepage must have a host of lower-case ASCII letters, digits and hyphens/);
+  assert.match(sharedManifest((m) => { m.homepage = "https://example.com/'onmouseover='alert(1)'y='"; }), /homepage must have a path of only letters, digits and \. _ ~ \/ -/);
+  // At most 200 characters, boundary included.
+  const padded = (length) => `https://example.com/${'a'.repeat(length - 'https://example.com/'.length)}`;
+  assert.equal(padded(200).length, 200);
+  assert.equal(withManifest((m) => { m.homepage = padded(200); }), '', '200 characters are allowed');
+  assert.match(withManifest((m) => { m.homepage = padded(201); }), /homepage must be at most 200 characters/);
+  assert.match(sharedManifest((m) => { m.homepage = padded(100000); }), /homepage must be at most 200 characters/);
+  // The cap and the stricter rule are for homepage only: other URLs keep the Directory's rules (a long url, a port-less quote-free one).
+  assert.equal(withManifest((m) => { m.deployment.recordset_page = `https://cloud.openvaultdb.com/ovdb/dbs/chinook/${'x'.repeat(300)}/{name}`; }), '', 'recordset_page has no length cap');
+  assert.equal(withManifest((m) => { m.deployment.recordset_page = 'https://cloud.openvaultdb.com/ovdb/dbs/chinook/collections/{name}.html'; }), '');
+});
+
+// The Directory's URL rules apply to every URL field of the manifest, in both forms (directory-rules.mjs mirrors
+// openvaultdb/directory a4aebb7 plus two refusals: any port, any percent escape in the path).
+test('every URL field is held to the Directory\'s rules: spelling, reserved names, ports, percent escapes', () => {
+  const fields = {
+    url: (m, v) => { m.url = v; },
+    'deployment.url': (m, v) => { m.deployment.url = v; },
+    'deployment.discovery': (m, v) => { m.deployment.discovery = v; },
+    'deployment.recordset_page': (m, v) => { m.deployment.recordset_page = `${v}{name}`; },
+    'publisher.url': (m, v) => { m.publisher.url = v; },
+    homepage: (m, v) => { m.homepage = v; },
+  };
+  // [description, suffix after the host of the field's own origin]: a bad spelling of the same url, per field.
+  const hostOf = (field) => ({ url: 'chinookdb.com', 'deployment.url': 'cloud.openvaultdb.com', 'deployment.discovery': 'chinookdb.com', 'deployment.recordset_page': 'cloud.openvaultdb.com', 'publisher.url': 'github.com', homepage: 'chinookdb.com' })[field];
+  const tail = (field) => ({ url: '/ovdb/dbs/chinook', 'deployment.url': '/ovdb/dbs/chinook', 'deployment.discovery': '/.well-known/openvaultdb', 'deployment.recordset_page': '/ovdb/dbs/chinook/collections/', 'publisher.url': '/datatug', homepage: '/' })[field];
+  for (const [field, set] of Object.entries(fields)) {
+    const host = hostOf(field);
+    const path = tail(field);
+    const line = new RegExp(`(^|\\n)ovdb\\.yaml: ${field.replace('.', '\\.')} `);
+    const refusing = (url, pattern, label = url) => {
+      for (const [name, check] of [['own', ownProblems], ['shared', hosterProblems]]) {
+        const problems = check((m) => set(m, url));
+        assert.match(problems, line, `${name} ${field}: ${label}`);
+        if (pattern) assert.match(problems, pattern, `${name} ${field}: ${label}`);
+      }
+    };
+    // Control: the right spelling of the same field is accepted, so that every refusal below is about the spelling.
+    for (const check of [ownProblems, hosterProblems]) assert.doesNotMatch(check((m) => set(m, `https://${host}${path}`)), line, `${field}: https://${host}${path}`);
+    refusing(`https://${host}:8443${path}`, /must not contain a port|must have a host/, 'a port');
+    refusing(`https://${host}:443${path}`, /must not contain a port|must have a host/, 'the default port written out');
+    refusing(`https://${host}/a%2Fb${path}`, /must not contain a percent escape|must have a path/, 'a percent escape');
+    refusing(`https://${host}/a%41b${path}`, /must not contain a percent escape|must have a path/, 'an escaped letter');
+    refusing(`https://${host}.${path}`, undefined, 'trailing dot');
+    refusing(`https://${host}${path} `, undefined, 'trailing space');
+    refusing(`https://${host}${path}\t`, undefined, 'trailing tab');
+    refusing(`https://${host}\\@evil.example.org${path}`, undefined, 'backslash');
+    refusing(`https://@${host}${path}`, undefined, 'empty userinfo');
+    refusing(`https://user@${host}${path}`, undefined, 'userinfo');
+    refusing(`https://${host.toUpperCase()}${path}`, undefined, 'upper-case host');
+    refusing(`https://b\u00fccher.example${path}`, undefined, 'non-ASCII host');
+    refusing(`https://${host}//x${path}`, undefined, 'empty path segment');
+    refusing(`https://${host}/a/../b${path}`, undefined, 'dot segment');
+    for (const zone of ['svc', 'test', 'local', 'internal', 'onion', 'intranet', 'private', 'lan', 'home', 'corp', 'invalid', 'example', 'home.arpa', 'localdomain', 'localhost']) {
+      refusing(`https://x.${zone}${path}`, /local, internal or reserved name/, `.${zone}`);
+    }
+    refusing(`https://127.0.0.1${path}`, /IP address/);
+    refusing(`https://localhost${path}`, /single-label/);
+    refusing(`http://${host}${path}`, /must be https, not http/);
+  }
+  // Per-field spellings that only make sense for some.
+  const only = (check, set, url, pattern) => assert.match(check((m) => set(m, url)), pattern, url);
+  for (const check of [ownProblems, hosterProblems]) {
+    only(check, fields['deployment.url'], 'https://cloud.example.com', /deployment.url is not written canonically \(it would be https:\/\/cloud.example.com\/\)/);
+    only(check, fields.url, 'https://ovdb.example.com/dbs/chinook/', /url must not have a trailing slash/);
+    only(check, fields.url, 'https://ovdb.co.uk/dbs/chinook', /url must have ovdb as a complete path segment or as a subdomain/);
+    only(check, fields['deployment.url'], 'https://cloud.example.com:8443/ovdb/dbs/x', /deployment.url must not contain a port/);
+    only(check, fields['deployment.url'], 'https://cloud.example.com/ovdb%2Fdbs/x', /deployment.url must not contain a percent escape/);
+    only(check, fields['deployment.discovery'], 'https://chinookdb.com:443/.well-known/openvaultdb', /deployment.discovery must not contain a port/);
+    only(check, fields['deployment.recordset_page'], 'https://cloud.openvaultdb.com/c/%2e%2e/', /must not contain a percent escape/);
+    only(check, (m, v) => { m.deployment.recordset_page = v; m.deployment.url = 'https://name.example.com/ovdb'; }, 'https://{name}.example.com/c', /recordset_page must have \{name\} in the path only/);
+  }
+  // The id and the engine, as the Directory spells them.
+  for (const [id, ok] of [['chinook', true], ['chinook-acme', true], ['a1', true], ['9lives', true], ['a--b', false], ['chinook-', false], ['-chinook', false], ['Chinook', false], ['a_b', false], ['a'.repeat(80), true], ['a'.repeat(81), false], ['a b', false]]) {
+    for (const [name, check] of [['own', ownProblems], ['shared', hosterProblems]]) {
+      const problems = check((m) => { m.id = id; });
+      if (ok) assert.doesNotMatch(problems, /id must be/, `${name} id ${id}`);
+      else assert.match(problems, /id must be lower-case letters, digits and single hyphens, at most 80 characters/, `${name} id ${id}`);
+    }
+  }
+  for (const [engine, ok] of [['sqlite', true], ['postgres', true], ['SQLite3', true], ['my.engine+x_1-2', true], ['a'.repeat(40), true], ['Cloudflare Workers', false], ['9db', false], ['a'.repeat(41), false], ['', false], ['-x', false], ['x/y', false]]) {
+    for (const [name, check] of [['own', ownProblems], ['shared', hosterProblems]]) {
+      const problems = check((m) => { m.deployment.engine = engine; });
+      if (ok) assert.doesNotMatch(problems, /deployment.engine/, `${name} engine ${engine}`);
+      else assert.match(problems, /deployment.engine is required/, `${name} engine ${JSON.stringify(engine)}`);
     }
   }
 });
@@ -864,23 +1166,24 @@ test('discovery is the canonical url\'s own document, and recordset_page is a te
   assert.match(deployment('recordset_page', 'https://cloud.openvaultdb.com/ovdb/dbs/chinook/collections/Customer'), /recordset_page must contain \{name\} exactly once/);
   assert.match(deployment('recordset_page', 'https://cloud.openvaultdb.com/{name}/{name}'), /recordset_page must contain \{name\} exactly once/);
   assert.match(deployment('recordset_page', 'https://evil.example.com/collections/{name}'), /recordset_page must be on the origin of deployment.url \(https:\/\/cloud.openvaultdb.com\)/);
-  assert.match(deployment('recordset_page', 'http://cloud.openvaultdb.com/collections/{name}'), /recordset_page must be an https URL/);
-  assert.match(deployment('recordset_page', 'https://cloud.openvaultdb.com/c/{name}?token=abc'), /recordset_page must not carry a query string/);
+  assert.match(deployment('recordset_page', 'http://cloud.openvaultdb.com/collections/{name}'), /recordset_page must be https, not http/);
+  assert.match(deployment('recordset_page', 'https://cloud.openvaultdb.com/c/{name}?token=abc'), /recordset_page must not contain a query/);
   // Only {name} is a placeholder; any other brace would reach a client unexpanded.
-  assert.match(deployment('recordset_page', 'https://cloud.openvaultdb.com/c/{name}/{id}'), /recordset_page may contain only the \{name\} placeholder/);
-  assert.match(deployment('recordset_page', 'https://cloud.openvaultdb.com/c/{name}/}'), /may contain only the \{name\} placeholder/);
-  assert.match(deployment('recordset_page', 'https://cloud.openvaultdb.com/{{name}'), /may contain only the \{name\} placeholder/);
+  assert.match(deployment('recordset_page', 'https://cloud.openvaultdb.com/c/{name}/{id}'), /recordset_page must not contain a percent escape/);
+  assert.match(deployment('recordset_page', 'https://cloud.openvaultdb.com/c/{name}/}'), /recordset_page must not contain a percent escape/);
+  assert.match(deployment('recordset_page', 'https://cloud.openvaultdb.com/{{name}'), /recordset_page must not contain a percent escape/);
+  assert.match(deployment('recordset_page', 'https://{name}.openvaultdb.com/c'), /recordset_page must have \{name\} in the path only/);
 });
 
 test('the publisher, the graph and the licences are stated and agree with the repository', () => {
   assert.match(withManifest((m) => { delete m.publisher.repository; }), /publisher.repository is required/);
-  assert.match(withManifest((m) => { m.publisher.repository = 'http://github.com/datatug/chinookdb'; }), /publisher.repository must be an https URL/);
+  assert.match(withManifest((m) => { m.publisher.repository = 'http://github.com/datatug/chinookdb'; }), /publisher.repository must be https:\/\/github.com\/<owner>\/<repository>/);
   assert.match(withManifest((m) => { m.publisher.repository = 'https://example.com/datatug/chinookdb'; }), /publisher.repository must be https:\/\/github.com\/<owner>\/<repository>/);
   assert.match(withManifest((m) => { m.publisher.repository = 'https://github.com/other/chinookdb'; }), /publisher.repository must belong to the owner in publisher.url/);
   assert.match(withManifest((m) => { m.publisher.repository = 'https://github.com/datatug/other'; }), /publisher.repository must be https:\/\/github.com\/datatug\/chinookdb, the repository this manifest is in/);
   assert.match(withManifest((m) => { m.publisher.url = 'https://example.com/datatug'; }), /publisher.url must be https:\/\/github.com\/<owner>/);
   assert.match(withManifest((m) => { m.meaning.graph.id = 'not-chinook'; }), /meaning.graph.id is not-chinook but the meaning file's id is "chinook"/);
-  assert.match(withManifest((m) => { m.meaning.graph.address = 'meaning://github.com/someone/else'; }), /meaning.graph.address must be meaning:\/\/github.com\/datatug\/chinookdb, derived from publisher.repository/);
+  assert.match(withManifest((m) => { m.meaning.graph.address = 'meaning://github.com/someone/else'; }), /meaning.graph.address must be meaning:\/\/github.com\/datatug\/chinookdb \(in any case\), derived from publisher.repository/);
   assert.match(withManifest((m) => { delete m.licences.data; }), /licences.data is required/);
   assert.match(withManifest((m) => { m.licences.data = 'see the README'; }), /licences.data must be a known SPDX licence id/);
   assert.match(withManifest((m) => { m.licences.model = 'Foo'; }), /licences.model must be a known SPDX licence id .*got "Foo"/);
@@ -921,14 +1224,17 @@ test('model.hcl is required with local model files, and the files are read from 
 
 test('git pathspec magic is a literal path, never a way to reach another file', () => {
   const naming = (path) => withManifest((m) => { m.model.hcl = path; });
-  // `:/` would resolve to the repository root, `:(icase)` would match another case; neither may pass or throw.
-  assert.match(naming(':/model/chinook.modelspec.hcl'), /model.hcl names :\/model\/chinook.modelspec.hcl, which must be a tracked regular file, but it is missing/);
-  assert.match(naming(':(icase)MODEL/chinook.modelspec.hcl'), /model.hcl names :\(icase\)MODEL\/chinook.modelspec.hcl, .* it is missing/);
-  assert.match(naming(':(top)model/chinook.modelspec.hcl'), /it is missing/);
-  assert.match(naming(':!model/chinook.modelspec.hcl'), /it is missing/);
+  // `:/` would resolve to the repository root, `:(icase)` would match another case; neither may pass or throw. A manifest
+  // path is letters, digits and . _ - / only (as the Directory's isRepositoryPath), so the manifest check refuses them
+  // before git is asked; the git layer must still take whatever it is asked about literally.
+  for (const magic of [':/model/chinook.modelspec.hcl', ':(icase)MODEL/chinook.modelspec.hcl', ':(top)model/chinook.modelspec.hcl', ':!model/chinook.modelspec.hcl']) {
+    assert.match(naming(magic), /model.hcl .* must be a file path relative to the repository root \(no glob, no \.\., not absolute\)/, magic);
+    assert.equal(manifestFiles.kind(magic), 'missing', `git is asked about ${magic} literally`);
+  }
   assert.match(naming('MODEL/chinook.modelspec.hcl'), /it is (missing|untracked)/, 'a different case is a different path');
   assert.equal(manifestFiles.kind('model/chinook.modelspec.hcl'), 'file');
   assert.equal(manifestFiles.kind(':(icase)MODEL/chinook.modelspec.hcl'), 'missing');
+  assert.throws(() => manifestFiles.read(':(icase)MODEL/chinook.modelspec.hcl'), /cannot be read at HEAD/);
 });
 
 test('model.address names the model in the registry: our own files and address, or another repository pinned by ref', () => {
@@ -993,10 +1299,10 @@ test('one grammar for the address, the module and the repository, as the registr
   assert.match(withManifest((m) => { m.publisher.repository = 'https://github.com/datatug/..'; }), /publisher.repository must be https:\/\/github.com\/<owner>\/<repository>/);
   assert.match(withManifest((m) => { m.publisher.repository = 'https://github.com/datatug/chinookdb.git'; }), /publisher.repository must be https:\/\/github.com\/<owner>\/<repository>/);
   assert.match(withManifest((m) => { m.publisher.repository = 'https://github.com/datatug/chinookdb.GIT'; }), /publisher.repository must be https:\/\/github.com\/<owner>\/<repository>/);
-  assert.match(withManifest((m) => { m.publisher.url = 'https://github.com/..'; }), /publisher.url must be https:\/\/github.com\/<owner>/);
+  assert.match(withManifest((m) => { m.publisher.url = 'https://github.com/..'; }), /publisher.url (must be https:\/\/github.com\/<owner>|is not written canonically)/);
 });
 
-test('an own manifest of a mixed-case or dot-named repository addresses it in lower case, as the Directory requires', () => {
+test('an own manifest of a mixed-case or dot-named repository: model.address in lower case, meaning.graph.address in any case', () => {
   const own = (repo, change = () => {}) => {
     const doc = manifestDoc();
     doc.publisher.url = `https://github.com/${repo.split('/')[0]}`;
@@ -1007,12 +1313,20 @@ test('an own manifest of a mixed-case or dot-named repository addresses it in lo
     return manifestProblems({ 'ovdb.yaml': stringifyYaml(doc) }, {});
   };
   assert.equal(own('datatug/chinookdb'), '');
-  assert.equal(own('DataTug/ChinookDB'), '', 'GitHub does not tell the cases apart; the address is the lower-case spelling');
+  assert.equal(own('DataTug/ChinookDB'), '', 'GitHub does not tell the cases apart; the model address is the lower-case spelling');
   assert.equal(own('datatug/.github'), '', 'a repository whose name starts with a dot');
   assert.equal(own('My-Org/My.Repo_2'), '');
   assert.match(own('DataTug/ChinookDB', (doc) => { doc.model.address = 'modelspec://github.com/DataTug/ChinookDB/chinook'; }), /model.address .* must be written in lower case/);
   assert.match(own('DataTug/ChinookDB', (doc) => { doc.model.address = 'modelspec://github.com/datatug/chinookdb/Chinook'; }), /model.address must be modelspec:\/\/github.com\/datatug\/chinookdb\/chinook, this repository plus the module name/);
   assert.match(own('datatug/chinookdb', (doc) => { doc.model.address = 'modelspec://github.com/datatug/other/chinook'; }), /model.address must be modelspec:\/\/github.com\/datatug\/chinookdb\/chinook/);
+  // What the Directory enforces on meaning.graph.address (a4aebb7): it equals the MeaningGraph registry's record verbatim, and that
+  // record is for this repository in whatever case the registry has it; publisher.repository may be in any case. Offline: this
+  // repository, in any case, whichever case publisher.repository is in.
+  for (const [repo, address] of [['DataTug/ChinookDB', 'meaning://github.com/datatug/chinookdb'], ['datatug/chinookdb', 'meaning://github.com/DataTug/ChinookDB'], ['DataTug/chinookdb', 'meaning://github.com/datatug/ChinookDB']]) {
+    assert.equal(own(repo, (doc) => { doc.meaning.graph.address = address; }), '', `${repo} with ${address}`);
+  }
+  assert.match(own('datatug/chinookdb', (doc) => { doc.meaning.graph.address = 'meaning://github.com/datatug/other'; }), /meaning.graph.address must be meaning:\/\/github.com\/datatug\/chinookdb \(in any case\), derived from publisher.repository/);
+  assert.match(own('datatug/chinookdb', (doc) => { doc.meaning.graph.address = 'meaning://github.com/datatug/chinookdb?ref=' + 'a'.repeat(40); }), /meaning.graph.address must be/);
 });
 
 test('a module with upper case letters is addressable, and the meaning file names it', () => {
@@ -1153,18 +1467,27 @@ test('the two forms do not mix', () => {
   assert.match(withManifest((m) => { delete m.meaning.file; }), /meaning.file is required/);
 });
 
-test('the report says what an offline check of a shared manifest leaves to the Directory', () => {
+test('the report of either form says it is an offline pre-check and what is not checked', () => {
+  const general = /^ovdb.yaml: this is an offline pre-check, not the OVDB Directory's verdict: the Directory is the authority and checks everything again at the pinned commit\. Not checked here: the full ModelSpec parse of the model \(properties, types, references\), the meaning check with the pinned core checker \(concept shapes, bindings, extends chains, values\), lookups in the ModelSpec registry and the MeaningGraph registry, and checks across records/;
+  // Own form: the general note, and nothing else.
+  const own = manifestReport({});
+  assert.deepEqual(own.problems, []);
+  assert.equal(own.notes.length, 1);
+  assert.match(own.notes[0], general);
+  assert.equal(own.notes[0], `ovdb.yaml: ${offlineNote}`);
+  // Shared form: the general note, then what the shape check leaves to the registries.
   const shared = sharedReport();
   assert.deepEqual(shared.problems, []);
-  assert.equal(shared.notes.length, 1);
-  assert.match(shared.notes[0], /^ovdb.yaml: shared model: this check is offline and validated only the shape of model.address, meaning.address, meaning.file, meaning.graph, the licences and recordsets\. The OVDB Directory checks both addresses against the ModelSpec registry and the MeaningGraph registry, reads both repositories at the pinned commits, and compares recordsets with the model's entities/);
-  // An own manifest is checked in full, so there is nothing to leave to anyone.
-  const own = manifestReport({});
-  assert.deepEqual(own, { problems: [], notes: [] });
-  // A refused shared manifest still carries its note, and the problems list stays what checkOvdbManifest returns.
+  assert.equal(shared.notes.length, 2);
+  assert.match(shared.notes[0], general);
+  assert.match(shared.notes[1], /^ovdb.yaml: shared model: this check is offline and validated only the shape of model.address, meaning.address, meaning.file, meaning.graph, the licences and recordsets\. The OVDB Directory checks both addresses against the ModelSpec registry and the MeaningGraph registry, reads both repositories at the pinned commits, and compares recordsets with the model's entities/);
+  // A refused manifest still carries its notes, and checkOvdbManifest still returns the problems alone.
   const refused = sharedReport((m) => { delete m.meaning.address; });
   assert.equal(refused.problems.length, 1);
-  assert.equal(refused.notes.length, 1);
+  assert.equal(refused.notes.length, 2);
+  assert.equal(manifestProblems({}), '');
+  // Nothing in the notes claims the pre-check is complete.
+  for (const note of [...own.notes, ...shared.notes]) assert.doesNotMatch(note, /checked in full|checks it all|same rules and the same refusals/i);
 });
 
 test('recordset names are checked in the shared form, where the model cannot be read', () => {
@@ -1261,7 +1584,7 @@ test('git variables inherited from a hook never reach another repository', () =>
 
 // examples/hoster: what someone who hosts their own copy of Chinook commits to their repository.
 const exampleDir = join(root, 'examples', 'hoster');
-const exampleRepository = 'https://github.com/example-co/chinook-hosting';
+const exampleRepository = 'https://github.com/example_org/chinook-hosting';
 const examplePin = '8c9e62ed6641c0a00faa3867167d928af4c44b06'; // the commit of this repository that the three registries pin
 const exampleRepo = (() => {
   const dir = join(scratch, `example-repo-${scratchCount++}`);
@@ -1275,83 +1598,76 @@ const exampleRepo = (() => {
 const atPin = (path) => exec('git', ['-C', root, 'show', `${examplePin}:${path}`], { stdio: 'pipe', maxBuffer: 64 * 1024 * 1024 }).toString();
 const exampleDoc = () => parseYaml(readFileSync(join(exampleDir, 'ovdb.yaml'), 'utf8'));
 
-// The URL rules of the Directory's own checker (scripts/lib/urls.mjs and urlProblem in its directory.mjs), as far as
-// they can be checked on the text: https, no credentials, query or fragment, a public-looking host (no IP address,
-// no single label, no reserved or local zone), one canonical spelling.
-const reservedZones = ['localhost', 'local', 'internal', 'localdomain', 'lan', 'home.arpa', 'arpa', 'intranet', 'corp', 'private', 'svc', 'home', 'test', 'example', 'invalid', 'onion'];
-const directoryUrlProblem = (value, { template = false } = {}) => {
-  const probe = template ? value.replace('{name}', 'name') : value;
-  if (typeof value !== 'string' || /[\u0000- \u007f\\]/.test(value) || (template && value.split('{name}').length !== 2)) return 'is not a URL';
-  if (template && value.indexOf('{name}') < value.indexOf('/', value.indexOf('//') + 2)) return '{name} outside the path';
-  const url = new URL(probe);
-  if (url.protocol !== 'https:' || url.username || url.password || url.search || probe.includes('?') || url.hash || probe.includes('#')) return 'is not plain https';
-  const host = url.hostname;
-  if (host.includes(':') || host.endsWith('.') || /^\d+(\.\d+)*$/.test(host) || !host.includes('.') || host.split('.').includes('')) return 'is not a public host name';
-  if (reservedZones.some((zone) => host === zone || host.endsWith(`.${zone}`))) return 'is in a reserved zone';
-  if (url.pathname.includes('//') || url.href !== probe) return 'is not written canonically';
-  return null;
+// What the Directory's own tests write for a shared-model manifest (hosterManifest in openvaultdb/directory
+// scripts/test.mjs): these keys, at these levels. The list is copied by hand; the Directory's fixture is not read here,
+// so this test cannot notice a change in it. `homepage` is the one optional key the example adds.
+const directoryHosterKeys = {
+  '': ['deployment', 'description', 'format', 'id', 'licences', 'meaning', 'model', 'publisher', 'recordsets', 'title', 'url'],
+  deployment: ['discovery', 'engine', 'recordset_page', 'url'],
+  model: ['address'],
+  meaning: ['address', 'file', 'graph'],
+  'meaning.graph': ['id'],
+  publisher: ['name', 'repository', 'url'],
+  licences: ['data'],
 };
 
-test('examples/hoster is a valid shared manifest, pinned at the commit the registries pin, and agrees with the Directory\'s own fixture', () => {
+test('examples/hoster passes the checker, has the keys of a shared manifest as the Directory\'s tests write it, and pins a commit that exists', () => {
   const report = reportOvdbManifest(gitRepoFiles(exampleRepo), { repository: exampleRepository });
   assert.deepEqual(report.problems, []);
-  assert.equal(report.notes.length, 1, 'and it says the Directory checks the addresses');
-  assert.match(report.notes[0], /The OVDB Directory checks both addresses against the ModelSpec registry and the MeaningGraph registry/);
+  assert.equal(report.notes.length, 2, 'and it says it is a pre-check, and that the Directory checks the addresses');
+  assert.match(report.notes[0], /this is an offline pre-check, not the OVDB Directory's verdict/);
+  assert.match(report.notes[1], /The OVDB Directory checks both addresses against the ModelSpec registry and the MeaningGraph registry/);
   const { data } = parseFrontmatter(readFileSync(join(exampleDir, 'OVDB.md'), 'utf8'));
   assert.deepEqual(data, { ovdb: 1, publish: ['./ovdb.yaml'] });
   const doc = exampleDoc();
 
-  // Field by field with the shared-form manifest of the Directory's test (hosterManifest in openvaultdb/directory
-  // scripts/test.mjs): the same keys at every level, nothing more, and values of the same kind.
-  assert.deepEqual(Object.keys(doc).sort(), ['deployment', 'description', 'format', 'homepage', 'id', 'licences', 'meaning', 'model', 'publisher', 'recordsets', 'title', 'url']);
-  assert.deepEqual(Object.keys(doc.deployment).sort(), ['discovery', 'engine', 'recordset_page', 'url']);
-  assert.deepEqual(Object.keys(doc.model), ['address']);
-  assert.deepEqual(Object.keys(doc.meaning).sort(), ['address', 'file', 'graph']);
-  assert.deepEqual(Object.keys(doc.meaning.graph), ['id']);
-  assert.deepEqual(Object.keys(doc.publisher).sort(), ['name', 'repository', 'url']);
-  assert.deepEqual(Object.keys(doc.licences), ['data']);
+  for (const [where, keys] of Object.entries(directoryHosterKeys)) {
+    const object = where === '' ? doc : where.split('.').reduce((value, key) => value[key], doc);
+    assert.deepEqual(Object.keys(object).filter((key) => !(where === '' && key === 'homepage')).sort(), keys, `keys of ${where || 'the manifest'}`);
+  }
   assert.equal(doc.format, 'ovdb-manifest/draft-1');
-  assert.match(doc.id, /^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'the Directory\'s id pattern');
-  assert.ok(doc.id.length <= 80);
   assert.equal(doc.model.address, `modelspec://github.com/datatug/chinookdb/chinook?ref=${examplePin}`);
   assert.equal(doc.meaning.address, `meaning://github.com/datatug/chinookdb?ref=${examplePin}`);
   assert.equal(doc.meaning.file, 'model/chinook.meaning.yaml');
   assert.deepEqual(doc.meaning.graph, { id: 'chinook' });
   assert.equal(doc.licences.data, 'MIT');
   assert.equal(doc.publisher.repository, exampleRepository);
-  assert.equal(doc.publisher.url, 'https://github.com/example-co');
+  assert.equal(doc.publisher.url, 'https://github.com/example_org');
 
-  // The Directory's URL rules, and its rules for the canonical url and the discovery document.
-  for (const [label, value] of [['url', doc.url], ['deployment.url', doc.deployment.url], ['deployment.discovery', doc.deployment.discovery], ['publisher.url', doc.publisher.url]]) {
-    assert.equal(directoryUrlProblem(value), null, label);
+  // The Directory's rules for the id, the engine and every URL (directory-rules.mjs mirrors them).
+  assert.ok(idPattern.test(doc.id) && doc.id.length <= maxIdLength);
+  assert.match(doc.deployment.engine, enginePattern);
+  assert.equal(canonicalUrlProblem(doc.url), null);
+  for (const value of [doc.deployment.url, doc.deployment.discovery, doc.publisher.url]) assert.equal(publicHttpsProblem(value), null, value);
+  assert.equal(publicHttpsProblem(doc.deployment.recordset_page, { template: true }), null);
+  assert.equal(homepageProblem(doc.homepage), null);
+  assert.equal(new URL(doc.deployment.discovery).origin, new URL(doc.url).origin, 'the discovery document is on the canonical origin');
+
+  // The pin: a commit of this repository, with the model and the meaning file the addresses name. It is read from this
+  // clone, so a shallow clone cannot run this test.
+  try {
+    exec('git', ['-C', root, 'cat-file', '-e', `${examplePin}^{commit}`], { stdio: 'pipe' });
+    exec('git', ['-C', root, 'merge-base', '--is-ancestor', examplePin, 'HEAD'], { stdio: 'pipe' });
+  } catch {
+    assert.fail(`the commit ${examplePin} that the example pins is not in this clone's history (a shallow clone?). This test reads the model and the meaning file at that commit: run git fetch --unshallow, or check out with fetch-depth: 0 (CI does).`);
   }
-  assert.equal(directoryUrlProblem(doc.deployment.recordset_page, { template: true }), null, 'recordset_page');
-  assert.equal(directoryUrlProblem(doc.homepage), null, 'homepage');
-  assert.match(new URL(doc.homepage).hostname, /(^|\.)example\.com$/, 'a placeholder');
-  assert.ok(!doc.url.endsWith('/'));
-  const canonical = new URL(doc.url);
-  assert.ok(canonical.pathname.split('/').includes('ovdb') || canonical.hostname.split('.').slice(0, -2).includes('ovdb'), 'ovdb as a path segment or a subdomain');
-  assert.equal(new URL(doc.deployment.discovery).origin, canonical.origin, 'the discovery document is on the canonical origin');
-  assert.equal(doc.deployment.discovery, `${canonical.origin}/.well-known/openvaultdb`);
-  assert.match(doc.deployment.engine, /^[A-Za-z][A-Za-z0-9_.+-]{0,39}$/);
-  assert.equal(doc.deployment.recordset_page.split('{name}').length, 2);
-
-  // The pin: a commit of this repository, with the model and the meaning file the addresses name.
-  assert.equal(exec('git', ['-C', root, 'cat-file', '-t', `${examplePin}^{commit}`], { stdio: 'pipe' }).toString().trim(), 'commit');
-  exec('git', ['-C', root, 'merge-base', '--is-ancestor', examplePin, 'HEAD'], { stdio: 'pipe' }); // throws when the pin is not in this history
   const pinned = JSON.parse(atPin('model/chinook.modelspec.json'));
   assert.equal(pinned.module.name, 'chinook', 'the module of the address');
   assert.deepEqual([...doc.recordsets].sort(), Object.keys(pinned.entities).sort(), 'recordsets are exactly the entities of the model at the pin');
   assert.equal(parseYaml(atPin('model/chinook.meaning.yaml')).id, doc.meaning.graph.id, 'the meaning file at the pin is the graph the id names');
   assert.ok(atPin('model/chinook.modelspec.hcl').length > 0, 'the model source exists at the pin');
 
-  // Placeholders are marked, and are example.com (which is nobody's) or an organisation named example-co.
+  // Placeholders: marked, on example.com, and an organisation name that no GitHub account can have (it has an underscore),
+  // so the example cannot be listed as it stands. The owner of a real organisation named example-co could have.
   const text = readFileSync(join(exampleDir, 'ovdb.yaml'), 'utf8');
   assert.ok(text.split('PLACEHOLDER').length - 1 >= 6, 'each value to replace is marked');
-  for (const value of [doc.url, doc.deployment.url, doc.deployment.discovery, doc.deployment.recordset_page]) {
+  for (const value of [doc.url, doc.deployment.url, doc.deployment.discovery, doc.deployment.recordset_page, doc.homepage]) {
     assert.match(new URL(value.replace('{name}', 'x')).hostname, /(^|\.)example\.com$/, value);
   }
-  assert.match(readFileSync(join(exampleDir, 'OVDB.md'), 'utf8'), /placeholders/);
+  assert.match(new URL(doc.publisher.repository).pathname.split('/')[1], /_/, 'an organisation name GitHub cannot issue');
+  assert.doesNotMatch(text, /example-co|nobody's/);
+  assert.match(readFileSync(join(exampleDir, 'OVDB.md'), 'utf8'), /must not be listed in the Directory as they stand/);
+  assert.match(text, /must not be\n# listed in the Directory as it stands/);
 });
 
 test('examples/hoster fails the checker when it is damaged the way a hoster could damage it', () => {
@@ -1373,29 +1689,180 @@ test('examples/hoster fails the checker when it is damaged the way a hoster coul
   assert.match(broken((d) => { delete d.meaning.address; }), /meaning.address is required/);
   assert.match(broken((d) => { d.model.modelspec = 'model/chinook.modelspec.json'; }), /model.hcl is required with local model files/);
   assert.match(broken((d) => { d.recordsets.pop(); d.recordsets.push('Album'); }), /recordsets lists a name twice/);
-  assert.match(broken((d) => { d.publisher.repository = 'https://github.com/datatug/chinookdb'; }), /publisher.repository must be https:\/\/github.com\/example-co\/chinook-hosting/);
+  assert.match(broken((d) => { d.publisher.repository = 'https://github.com/datatug/chinookdb'; }), /publisher.repository must be https:\/\/github.com\/example_org\/chinook-hosting/);
   assert.match(broken((d) => { d.publisher.repository = 'https://github.com/datatug/chinookdb'; d.publisher.url = 'https://github.com/datatug'; }, {}), /model.address .* names this repository/);
-  assert.match(broken((d) => { d.url = 'https://example.com/dbs/chinook'; }), /url must have an ovdb path segment or an ovdb subdomain/);
+  assert.match(broken((d) => { d.url = 'https://example.com/dbs/chinook'; }), /url must have ovdb as a complete path segment or as a subdomain/);
+  assert.match(broken((d) => { d.url = 'https://ovdb.example.com/dbs/chinook/'; }), /url must not have a trailing slash/);
+  assert.match(broken((d) => { d.deployment.url = 'https://cloud.example.com'; }), /deployment.url is not written canonically/);
+  assert.match(broken((d) => { d.deployment.engine = 'Cloud SQL'; }), /deployment.engine is required/);
+  assert.match(broken((d) => { d.homepage = 'https://example.com:8443/'; }), /homepage must not contain a port/);
 });
 
-test('the command line reports a manifest, and the notes of a shared one', () => {
-  const run = (...args) => spawnSync(process.execPath, [join(root, 'scripts', 'check-ovdb-manifest.mjs'), ...args], { encoding: 'utf8', env: cleanGitEnv() });
+test('the command line says it is a pre-check, in both forms, and checks the directory it is given', () => {
+  const run = (...args) => spawnSync(process.execPath, [join(root, 'scripts', 'check-ovdb-manifest.mjs'), ...args], { encoding: 'utf8', env: isolatedGitEnv() });
+  const preCheck = /OVDB manifest pre-check found nothing wrong in .* \(HEAD\)\. This is an offline pre-check; the OVDB Directory is the authority\./;
   const shared = run('--repository', exampleRepository, exampleRepo);
   assert.equal(shared.status, 0, shared.stderr);
-  assert.match(shared.stdout, /OVDB manifest check passed for .*example-repo-\d+ \(HEAD\)\./);
+  assert.match(shared.stdout, preCheck);
+  assert.match(shared.stdout, /note: ovdb.yaml: this is an offline pre-check, not the OVDB Directory's verdict: the Directory is the authority/);
+  assert.match(shared.stdout, /Not checked here: the full ModelSpec parse of the model/);
   assert.match(shared.stdout, /note: ovdb.yaml: shared model: this check is offline .* The OVDB Directory checks both addresses against the ModelSpec registry and the MeaningGraph registry/);
+  const own = run('--repository', manifestRepository);
+  assert.equal(own.status, 0, own.stderr);
+  assert.match(own.stdout, preCheck, 'this repository\'s own manifest is a pre-check too');
+  assert.match(own.stdout, /note: ovdb.yaml: this is an offline pre-check, not the OVDB Directory's verdict/);
+  assert.match(own.stdout, /Not checked here: .*lookups in the ModelSpec registry and the MeaningGraph registry, and checks across records/);
+  assert.doesNotMatch(`${own.stdout}${shared.stdout}`, /checked in full|checks it all|passed/);
   const wrongRepository = run('--repository', 'https://github.com/someone/else', exampleRepo);
   assert.equal(wrongRepository.status, 1);
   assert.match(wrongRepository.stderr, /ovdb manifest: ovdb.yaml: publisher.repository must be https:\/\/github.com\/someone\/else, the repository this manifest is in/);
-  const own = run('--repository', manifestRepository);
-  assert.equal(own.status, 0, own.stderr);
-  assert.doesNotMatch(own.stdout, /note:/, 'this repository\'s own manifest is checked in full');
   const plain = join(scratch, `plain-${scratchCount++}`);
   mkdirSync(plain);
   assert.equal(run(plain).status, 1);
   assert.equal(run('--bogus').status, 2);
   assert.equal(run('a', 'b').status, 2);
   assert.equal(run('--repository').status, 2);
+
+  // A directory that is not the root of the repository: its own files are read, and it says it was checked as a root.
+  const here = run('--repository', exampleRepository, exampleDir);
+  assert.equal(here.status, 0, here.stderr);
+  assert.match(here.stdout, preCheck);
+  assert.match(here.stdout, /note: .*examples\/hoster is a subdirectory of the repository at .*: its OVDB.md and manifest were checked as if it were the repository root\. The Directory reads OVDB.md at the root of the repository\./);
+  assert.match(here.stdout, /shared model: this check is offline/, 'the example\'s own manifest was read, not the root\'s');
+  const wrongHere = run('--repository', exampleRepository, join(root, 'examples'));
+  assert.equal(wrongHere.status, 1, 'examples/ has no OVDB.md');
+  assert.match(wrongHere.stderr, /OVDB.md is missing/);
+  // A repository with the example at its root and a nonsense manifest in sub/: sub/ is what is checked, and it is refused.
+  const nested = join(scratch, `nested-${scratchCount++}`);
+  mkdirSync(join(nested, 'sub'), { recursive: true });
+  for (const name of ['OVDB.md', 'ovdb.yaml']) copyFileSync(join(exampleDir, name), join(nested, name));
+  copyFileSync(join(exampleDir, 'OVDB.md'), join(nested, 'sub', 'OVDB.md'));
+  writeFileSync(join(nested, 'sub', 'ovdb.yaml'), 'format: nonsense\n');
+  gitIn(nested, 'init', '-q', '-b', 'main');
+  gitIn(nested, 'add', '.');
+  commitAs(nested, '-m', 'nested');
+  const root1 = run('--repository', exampleRepository, nested);
+  assert.equal(root1.status, 0, root1.stderr);
+  const sub = run('--repository', exampleRepository, join(nested, 'sub'));
+  assert.equal(sub.status, 1, 'the nonsense manifest in sub/ is not passed because the root has a good one');
+  assert.match(sub.stderr, /ovdb manifest: ovdb.yaml: format must be ovdb-manifest\/draft-1, got "nonsense"/);
+  assert.doesNotMatch(sub.stdout, /found nothing wrong/);
+  // And the library reads relative to the directory it is given, whichever way it is asked.
+  const files = gitRepoFiles(join(nested, 'sub'));
+  assert.equal(files.read('ovdb.yaml'), 'format: nonsense\n');
+  assert.equal(files.kind('ovdb.yaml'), 'file');
+  assert.equal(files.kind('model/chinook.modelspec.json'), 'missing');
+});
+
+// Single-field edits of the two bases (this repository's own manifest, and examples/hoster) that the OVDB Directory refuses
+// without looking at a registry or a repository: openvaultdb/directory a4aebb7 (the head of its pull request 8) plus the
+// port and percent-escape refusals that branch is adding. Each was run through the Directory's own manifestProblems and
+// the spelling rules of its analyseDatabase when this list was made (a differential run of 99 edits and 4590 further
+// variants: the checker passed none that the Directory refused). The checker must refuse every one. `forms`: where
+// the edit applies. The three entries that start with "homepage" and the 201-character one are refused here only: the
+// homepage rule is not the Directory's yet.
+const long = (n, c = 'a') => c.repeat(n);
+const directoryRefuses = [
+  // URL spelling (the reviewer's table)
+  ['deployment.url without a path', 'both', (m) => { m.deployment.url = 'https://cloud.example.com'; }],
+  ['url with a trailing slash', 'both', (m) => { m.url = 'https://ovdb.example.com/dbs/chinook/'; }],
+  ['url on ovdb.co.uk (the registered name under a two-label suffix)', 'both', (m) => { m.url = 'https://ovdb.co.uk/dbs/chinook'; m.deployment.discovery = 'https://ovdb.co.uk/.well-known/openvaultdb'; }],
+  ['url without an ovdb marker', 'both', (m) => { m.url = 'https://chinookdb.com/dbs/chinook'; }],
+  ['engine with a space', 'both', (m) => { m.deployment.engine = 'Cloudflare Workers'; }],
+  ['engine starting with a digit', 'both', (m) => { m.deployment.engine = '9db'; }],
+  ['engine of 41 characters', 'both', (m) => { m.deployment.engine = long(41); }],
+  ['id a--b', 'both', (m) => { m.id = 'a--b'; }],
+  ['id ending in a hyphen', 'both', (m) => { m.id = 'chinook-'; }],
+  ['id of 90 characters', 'both', (m) => { m.id = long(90); }],
+  ['deployment.url on .svc', 'both', (m) => { m.deployment.url = 'https://grafana.monitoring.svc/ovdb/dbs/chinook'; }],
+  ['deployment.url on .test', 'both', (m) => { m.deployment.url = 'https://staging.test/ovdb/dbs/chinook'; }],
+  ['deployment.url on .onion', 'both', (m) => { m.deployment.url = 'https://abc.onion/ovdb/dbs/chinook'; }],
+  ['deployment.url on .intranet', 'both', (m) => { m.deployment.url = 'https://db.intranet/ovdb/dbs/chinook'; }],
+  ['deployment.url on home.arpa', 'both', (m) => { m.deployment.url = 'https://db.home.arpa/ovdb/dbs/chinook'; }],
+  ['deployment.url on .local', 'both', (m) => { m.deployment.url = 'https://db.local/ovdb/dbs/chinook'; }],
+  ['deployment.url on .internal', 'both', (m) => { m.deployment.url = 'https://ovdb.metadata.google.internal/ovdb/dbs/chinook'; }],
+  ['deployment.url host with a trailing dot', 'both', (m) => { m.deployment.url = 'https://ovdb.metadata.google.internal./ovdb/dbs/chinook'; }],
+  ['deployment.url with a trailing space', 'both', (m) => { m.deployment.url = 'https://cloud.example.com/ovdb/dbs/chinook '; }],
+  ['deployment.url with a tab inside', 'both', (m) => { m.deployment.url = 'https://cloud.example.com/ovdb/dbs/\tchinook'; }],
+  ['deployment.url with a backslash', 'both', (m) => { m.deployment.url = 'https://cloud.example.com\\@evil.example.org/x'; }],
+  ['deployment.url with empty userinfo', 'both', (m) => { m.deployment.url = 'https://@cloud.example.com/x'; }],
+  ['deployment.url with an upper-case host', 'both', (m) => { m.deployment.url = 'https://Cloud.Example.com/ovdb/dbs/chinook'; }],
+  ['deployment.url with an IDN host in Unicode', 'both', (m) => { m.deployment.url = 'https://bücher.example.com/ovdb/dbs/chinook'; }],
+  ['deployment.url with // in the path', 'both', (m) => { m.deployment.url = 'https://cloud.example.com/ovdb//dbs/chinook'; }],
+  ['deployment.url with %2e%2e', 'both', (m) => { m.deployment.url = 'https://cloud.example.com/ovdb/%2e%2e/chinook'; }],
+  ['deployment.url with /a/../x', 'both', (m) => { m.deployment.url = 'https://cloud.example.com/a/../x'; }],
+  ['recordset_page with {name} in the host', 'both', (m) => { m.deployment.url = 'https://name.example.com/ovdb'; m.deployment.recordset_page = 'https://{name}.example.com/c'; }],
+  ['deployment.discovery on another origin', 'both', (m) => { m.deployment.discovery = 'https://elsewhere.example.org/.well-known/openvaultdb'; }],
+  ['homepage http', 'both', (m) => { m.homepage = 'http://example.com/'; }],
+  ['homepage on .svc', 'both', (m) => { m.homepage = 'https://grafana.monitoring.svc/'; }],
+  ['homepage with a trailing dot', 'both', (m) => { m.homepage = 'https://printer.local./'; }],
+  ['publisher.url with a query', 'both', (m) => { m.publisher.url = 'https://github.com/datatug?x=1'; }],
+  // the two refusals the Directory is adding
+  ['deployment.url with a port', 'both', (m) => { m.deployment.url = 'https://cloud.example.com:8443/ovdb/dbs/x'; }],
+  ['deployment.url with :443', 'both', (m) => { m.deployment.url = 'https://cloud.example.com:443/ovdb/dbs/x'; }],
+  ['deployment.url with %2F', 'both', (m) => { m.deployment.url = 'https://cloud.example.com/ovdb%2Fdbs/x'; }],
+  ['recordset_page with a port', 'both', (m) => { m.deployment.recordset_page = 'https://cloud.example.com:8443/c/{name}'; }],
+  ['recordset_page with %41', 'both', (m) => { m.deployment.recordset_page = 'https://cloud.example.com/c%41/{name}'; }],
+  ['url with a port', 'both', (m) => { m.url = 'https://ovdb.example.com:8443/dbs/chinook'; }],
+  ['publisher.url with a port', 'both', (m) => { m.publisher.url = 'https://github.com:443/datatug'; }],
+  // the homepage rule (not the Directory's yet)
+  ['homepage with a quote in the host', 'both', (m) => { m.homepage = 'https://x"onmouseover="alert(1)"y=".example.com/'; }],
+  ['homepage with a quote in the path', 'both', (m) => { m.homepage = "https://example.com/'onmouseover='alert(1)'y='"; }],
+  ['homepage of 201 characters', 'both', (m) => { m.homepage = `https://example.com/${long(181)}`; }],
+  // own form: paths
+  ['model.modelspec with a space', 'own', (m) => { m.model.modelspec = 'model/chinook v2.modelspec.json'; }],
+  ['model.modelspec with @ and +', 'own', (m) => { m.model.modelspec = 'model/chinook@1+x.modelspec.json'; }],
+  ['meaning.file non-ASCII', 'own', (m) => { m.meaning.file = 'model/chinooké.meaning.yaml'; }],
+  ['model.hcl with a colon', 'own', (m) => { m.model.hcl = 'model/a:b.modelspec.hcl'; }],
+  // addresses and the rest of the shape (both forms apply where the field exists)
+  ['model.address with an upper-case organisation', 'shared', (m) => { m.model.address = `modelspec://github.com/Datatug/chinookdb/chinook?ref=${long(40, 'a')}`; }],
+  ['meaning.address with upper case', 'shared', (m) => { m.meaning.address = `meaning://github.com/datatug/ChinookDB?ref=${long(40, 'a')}`; }],
+  ['model.address of the publisher\'s own repository', 'shared', (m) => { m.model.address = `modelspec://github.com/example_org/chinook-hosting/chinook?ref=${long(40, 'a')}`; }],
+  ['meaning.address of the publisher\'s own repository', 'shared', (m) => { m.meaning.address = `meaning://github.com/example_org/chinook-hosting?ref=${long(40, 'a')}`; }],
+  ['model.address with a .GIT repository', 'shared', (m) => { m.model.address = `modelspec://github.com/datatug/a.GIT/chinook?ref=${long(40, 'a')}`; }],
+  ['recordsets_partial not a boolean', 'shared', (m) => { m.recordsets_partial = 'yes'; }],
+  ['meaning.file with ..', 'shared', (m) => { m.meaning.file = '../x.meaning.yaml'; }],
+  ['recordsets_partial in the own form', 'own', (m) => { m.recordsets_partial = true; }],
+  ['meaning.address in the own form', 'own', (m) => { m.meaning.address = `meaning://github.com/datatug/chinookdb?ref=${long(40, 'a')}`; }],
+];
+
+test('the checker refuses every one of a list of single-field edits that the Directory refuses', () => {
+  const bases = {
+    own: [() => manifestDoc(), { repository: manifestRepository }],
+    shared: [() => exampleDoc(), { repository: exampleRepository }],
+  };
+  assert.deepEqual(memoryProblems(bases.own[0](), bases.own[1]), '', 'control: the own base is accepted');
+  assert.deepEqual(memoryProblems(bases.shared[0](), bases.shared[1]), '', 'control: the shared base is accepted');
+  let tried = 0;
+  const accepted = [];
+  for (const [form, [base, options]] of Object.entries(bases)) {
+    for (const [label, forms, apply] of directoryRefuses) {
+      if (forms !== 'both' && forms !== form) continue;
+      const doc = base();
+      apply(doc);
+      tried += 1;
+      if (memoryProblems(doc, options) === '') accepted.push(`${form}: ${label}`);
+    }
+  }
+  assert.ok(tried >= 95, `${tried} edits tried`);
+  assert.deepEqual(accepted, [], 'passes here, refused by the Directory');
+});
+
+// What the checker still passes and the Directory refuses, because it needs more than the manifest: the contents of the
+// model and the meaning file (the Directory parses them in full), the registries, the other records. Pinned so that closing
+// a gap is a decision: when one is closed, move its case into the list above.
+test('the known gaps: what an offline pre-check of an own manifest does not read', () => {
+  const real = JSON.parse(read('model/chinook.modelspec.json'));
+  const thin = { module: { name: 'chinook' }, entities: Object.fromEntries(Object.keys(real.entities).map((name) => [name, {}])) };
+  const own = (files) => {
+    const held = new Map([['OVDB.md', read('OVDB.md')], ['ovdb.yaml', read('ovdb.yaml')], ['model/chinook.modelspec.json', read('model/chinook.modelspec.json')], ['model/chinook.modelspec.hcl', read('model/chinook.modelspec.hcl')], ['model/chinook.meaning.yaml', read('model/chinook.meaning.yaml')], ...Object.entries(files)]);
+    return checkOvdbManifest({ problem: () => '', kind: (path) => (held.has(path) ? 'file' : 'missing'), read: (path) => held.get(path) }, { repository: manifestRepository }).join('\n');
+  };
+  // The Directory: `has no "modelspec" version` and `entity Album has no properties`.
+  assert.equal(own({ 'model/chinook.modelspec.json': JSON.stringify(thin), 'model/chinook.modelspec.hcl': '' }), '', 'gap 1: the model is not parsed in full (version, properties, types, references)');
+  // The Directory: `has no concepts list`.
+  assert.equal(own({ 'model/chinook.meaning.yaml': 'id: chinook\nlicense: CC0-1.0\nmodels:\n  chinook: chinook.modelspec.hcl\n' }), '', 'gap 2: the meaning file is not checked (concepts, bindings, extends chains, values)');
+  // The registry and cross-record checks need other repositories and records: they are not in an offline check at all.
 });
 
 test('the lint script and the drift guard act on their own repositories, whatever git variables a hook passes down', () => {
@@ -1416,7 +1883,7 @@ test('the lint script and the drift guard act on their own repositories, whateve
   });
   const before = snapshot();
   assert.equal(before.bare, 'false');
-  const hook = { ...process.env, GIT_DIR: join(decoy, '.git'), GIT_INDEX_FILE: join(decoy, '.git', 'index') };
+  const hook = { ...isolatedGitEnv(), GIT_DIR: join(decoy, '.git'), GIT_INDEX_FILE: join(decoy, '.git', 'index') };
 
   // scripts/lint-modelspec.sh, with a stand-in for the specscore CLI that records the git variables it is started with.
   const log = join(scratch, `specscore-${scratchCount++}.log`);

@@ -3,11 +3,13 @@ import { existsSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { cleanGitEnv } from './git-env.mjs';
+import { canonicalUrlProblem, enginePattern, homepageProblem, idPattern, isRepositoryPath, maxIdLength, publicHttpsProblem } from './directory-rules.mjs';
 
 // Checks the OpenVaultDB publisher manifest: the root OVDB.md that opts the repository in and the
 // manifest files it lists.
 //
-// Every path in OVDB.md and in a manifest is relative to the repository root, and must name a regular
+// Every path in OVDB.md and in a manifest is relative to the directory the files are read from (the repository root, for
+// the Directory), and must name a regular
 // file that git tracks at HEAD: not a directory, a symlink, an untracked file or an ignored one (the
 // Directory reads the pinned commit, where only tracked files exist).
 //
@@ -33,13 +35,15 @@ import { cleanGitEnv } from './git-env.mjs';
 // `recordsets_partial: true` says that `recordsets` lists a subset of the model's entities. Neither
 // address may name the publisher's own repository.
 //
-// Both forms may have an optional `homepage`: the publisher's own page for the database, a public https URL
-// (shown as Website on the Directory page; the Directory copies it into its index).
+// Both forms may have an optional `homepage`: the publisher's own page for the database, under a stricter
+// URL rule than the Directory's (see directory-rules.mjs: 200 characters, plain ASCII host and path).
 //
-// This checker is offline. For the shared form it validates shape only: it cannot read the model or the
-// graph, so the Directory checks both addresses against the ModelSpec registry and the MeaningGraph
-// registry, reads both repositories at the pinned commits and compares `recordsets` with the model's
-// entities. The report says so (see `notes`).
+// This is an offline PRE-CHECK, not the Directory's verdict, and the Directory is the authority. The URL, id,
+// engine and path rules are the Directory's own (directory-rules.mjs). It does not parse the model or the meaning
+// file in full, look at the registries, or compare across records; for the shared form it cannot read the model
+// or the graph at all, so it validates shape only, and the Directory checks both addresses against the ModelSpec
+// registry and the MeaningGraph registry, reads both repositories at the pinned commits and compares `recordsets`
+// with the model's entities. Every report says so (see `notes`, `offlineNote`).
 //
 // `model.hcl` is the source file of an own model. The Directory index takes `model.path` from the meaning
 // file's `models:` entry for the module, and the manifest's `model.hcl` must be that same path.
@@ -52,7 +56,6 @@ import { cleanGitEnv } from './git-env.mjs';
 // (`<address>.<Entity>` is an entity reference).
 
 const manifestFormat = 'ovdb-manifest/draft-1';
-const globChars = /[*?[\]{}\\]/;
 // The SPDX identifiers a manifest may use for a licence. Small on purpose; add one when a database needs it.
 export const licenceIds = [
   '0BSD', 'AGPL-3.0-only', 'Apache-2.0', 'BSD-2-Clause', 'BSD-3-Clause', 'CC-BY-4.0', 'CC-BY-SA-4.0', 'CC0-1.0',
@@ -113,7 +116,7 @@ export function gitRepoFiles(root) {
     },
     read(path) {
       try {
-        return git('cat-file', 'blob', `HEAD:${path}`);
+        return git('cat-file', 'blob', `HEAD:./${path}`); // ./ : relative to `root`, which need not be the top of the repository
       } catch (error) {
         if (error.code === 'ENOBUFS') throw new Error(`${path} is larger than ${maxFileBytes / 1024 / 1024} MB, which is more than a manifest file may be`);
         throw new Error(`${path} cannot be read at HEAD: ${String(error.stderr ?? '').trim().split('\n').at(-1) || error.message}`);
@@ -159,29 +162,9 @@ export function parseFrontmatter(text) {
 
 const isText = (value) => typeof value === 'string' && value.trim() !== '';
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
-const isSafePath = (path) =>
-  isText(path) && !globChars.test(path) && !path.startsWith('/') && !path.endsWith('/') && !path.split('/').some((part) => part === '' || part === '.' || part === '..');
-
-// Why a value cannot be a URL a manifest may publish, or '' when it can.
-function urlProblem(value) {
-  if (!isText(value)) return 'is required';
-  let url;
-  try {
-    url = new URL(value);
-  } catch {
-    return 'must be an https URL';
-  }
-  if (url.protocol !== 'https:') return 'must be an https URL';
-  if (url.username || url.password) return 'must not carry credentials';
-  if (url.search || url.hash || value.includes('?') || value.includes('#')) return 'must not carry a query string or fragment';
-  const host = url.hostname;
-  if (host.startsWith('[') || /^\d+(\.\d+)*$/.test(host)) return 'must name a host, not an IP address';
-  const labels = host.split('.');
-  if (labels.length < 2 || ['localhost', 'local', 'internal', 'localdomain', 'lan', 'home', 'corp'].includes(labels.at(-1)) || labels.includes('localhost')) {
-    return 'must be a public host, not a local or internal one';
-  }
-  return '';
-}
+// A path in a repository, as the Directory spells it (isRepositoryPath): relative, letters, digits and . _ - / only,
+// no `..`, `.` or empty segment, no glob.
+const isSafePath = isRepositoryPath;
 
 const githubOwner = (value) => {
   const owner = githubOwnerPath.exec(value)?.[1];
@@ -191,6 +174,9 @@ const githubRepo = (value) => {
   const match = githubRepoPath.exec(value);
   return match && namesRepository(match[1], match[2]) ? { owner: match[1], repo: match[2] } : undefined;
 };
+
+// What every report says, for either form: this is a pre-check, and what it does not check.
+export const offlineNote = 'this is an offline pre-check, not the OVDB Directory\'s verdict: the Directory is the authority and checks everything again at the pinned commit. Not checked here: the full ModelSpec parse of the model (properties, types, references), the meaning check with the pinned core checker (concept shapes, bindings, extends chains, values), lookups in the ModelSpec registry and the MeaningGraph registry, and checks across records (a canonical url, a deployment or a recordset page that two databases claim).';
 
 // Checks OVDB.md and every manifest it lists. Returns { problems, notes }: `problems` is empty when the
 // manifest is good; `notes` says what this offline check could not decide and who does (the Directory).
@@ -271,28 +257,33 @@ function analyseManifest(path, files, { repository } = {}) {
 
   if (manifest.format !== manifestFormat) bad(`format must be ${manifestFormat}, got ${JSON.stringify(manifest.format)}`);
   for (const field of ['id', 'title', 'description']) if (!isText(manifest[field])) bad(`${field} is required`);
-  if (isText(manifest.id) && !/^[a-z][a-z0-9-]*$/.test(manifest.id)) bad('id must be lower-case letters, digits and hyphens');
+  if (isText(manifest.id) && (!idPattern.test(manifest.id) || manifest.id.length > maxIdLength)) bad(`id must be lower-case letters, digits and single hyphens, at most ${maxIdLength} characters`);
 
-  const checkUrl = (value, label) => {
-    const problem = urlProblem(value);
+  // A URL the manifest publishes, under the Directory's rules (directory-rules.mjs); returns it parsed, or undefined.
+  const checkUrl = (value, label, { check = publicHttpsProblem, ...options } = {}) => {
+    if (value === undefined || value === null || value === '') {
+      bad(`${label} is required`);
+      return undefined;
+    }
+    const problem = check(value, options);
     if (problem) bad(`${label} ${problem}`);
-    return problem ? undefined : new URL(value);
+    return problem ? undefined : new URL(options.template ? value.replace('{name}', 'name') : value);
   };
   const need = (object, field, label) => {
     if (!isText(object?.[field])) bad(`${label} is required`);
   };
 
   // The canonical identity, and the places it is served and discovered.
-  const canonical = checkUrl(manifest.url, 'url');
-  if (canonical && !(canonical.pathname.split('/').includes('ovdb') || canonical.hostname.split('.').slice(0, -2).includes('ovdb'))) {
-    bad('url must have an ovdb path segment or an ovdb subdomain');
+  const canonical = checkUrl(manifest.url, 'url', { check: canonicalUrlProblem });
+  // The publisher's own page for the database: any public https URL on any origin, under the stricter
+  // homepage rule (200 characters at most, plain ASCII host and path), which the Directory does not have.
+  if (manifest.homepage !== undefined) {
+    const problem = homepageProblem(manifest.homepage);
+    if (problem) bad(`homepage ${problem}`);
   }
-  // The publisher's human page for the database (shown as Website on the Directory page): any public https
-  // URL, same hygiene as the others, and not necessarily on the origin of the canonical url.
-  if (manifest.homepage !== undefined) checkUrl(manifest.homepage, 'homepage');
   const deployment = manifest.deployment;
   const deployed = checkUrl(deployment?.url, 'deployment.url');
-  need(deployment, 'engine', 'deployment.engine');
+  if (typeof deployment?.engine !== 'string' || !enginePattern.test(deployment.engine)) bad('deployment.engine is required: a letter, then letters, digits and . _ + - (40 characters at most)');
   const discovery = checkUrl(deployment?.discovery, 'deployment.discovery');
   if (discovery && canonical) {
     if (discovery.origin !== canonical.origin) bad(`deployment.discovery must be on the origin of url (${canonical.origin}), the document that lists it`);
@@ -300,23 +291,18 @@ function analyseManifest(path, files, { repository } = {}) {
   }
   const page = deployment?.recordset_page;
   if (page !== undefined) {
-    if (!isText(page) || page.split('{name}').length !== 2) bad('deployment.recordset_page must contain {name} exactly once');
-    else if (/[{}]/.test(page.replace('{name}', ''))) bad('deployment.recordset_page may contain only the {name} placeholder, no other { or }');
-    else {
-      const expanded = checkUrl(page.replace('{name}', 'Name'), 'deployment.recordset_page');
-      if (expanded && deployed && expanded.origin !== deployed.origin) bad(`deployment.recordset_page must be on the origin of deployment.url (${deployed.origin})`);
-    }
+    const expanded = checkUrl(page, 'deployment.recordset_page', { template: true });
+    if (expanded && deployed && expanded.origin !== deployed.origin) bad(`deployment.recordset_page must be on the origin of deployment.url (${deployed.origin})`);
   }
 
   // The publisher.
   need(manifest.publisher, 'name', 'publisher.name');
   const publisherUrl = manifest.publisher?.url;
   const owner = checkUrl(publisherUrl, 'publisher.url') && githubOwner(publisherUrl);
-  if (publisherUrl && !owner && !urlProblem(publisherUrl)) bad('publisher.url must be https://github.com/<owner>');
+  if (publisherUrl && !owner && !publicHttpsProblem(publisherUrl)) bad('publisher.url must be https://github.com/<owner>');
   const repo = manifest.publisher?.repository;
   const repoParts = typeof repo === 'string' ? githubRepo(repo) : undefined;
   if (!isText(repo)) bad('publisher.repository is required');
-  else if (urlProblem(repo)) bad(`publisher.repository ${urlProblem(repo)}`);
   else if (!repoParts) bad('publisher.repository must be https://github.com/<owner>/<repository>');
   else {
     if (owner && repoParts.owner !== owner) bad('publisher.repository must belong to the owner in publisher.url');
@@ -479,9 +465,12 @@ function analyseManifest(path, files, { repository } = {}) {
         }
       }
     }
+    // The Directory compares meaning.graph.address with the MeaningGraph registry's record of the graph verbatim, and that
+    // record is for this repository in whatever case the registry spells it: offline, the repository must be this one,
+    // in any case; the exact spelling is the registry's, and the Directory checks it.
     if (isText(graph?.address) && repoParts) {
       const expected = `meaning://github.com/${repoParts.owner}/${repoParts.repo}`;
-      if (graph.address !== expected) bad(`meaning.graph.address must be ${expected}, derived from publisher.repository`);
+      if (graph.address.toLowerCase() !== expected.toLowerCase()) bad(`meaning.graph.address must be ${expected} (in any case), derived from publisher.repository`);
     }
   } else {
     // ---- shared model: the model and the meaning graph are published in other repositories ----
@@ -530,6 +519,13 @@ function analyseManifest(path, files, { repository } = {}) {
     if (listed.size !== recordsets.length) bad('recordsets lists a name twice');
     const misshapen = recordsets.filter((name) => !entityName.test(name));
     if (misshapen.length) bad(`recordsets names must look like ModelSpec entity names (letters, digits, underscore): ${misshapen.map((name) => JSON.stringify(name)).join(', ')}`);
+    // Every recordset page the template makes is a URL the Directory checks again with the real name.
+    if (isText(page) && !misshapen.length && !publicHttpsProblem(page, { template: true })) {
+      for (const name of recordsets) {
+        const problem = publicHttpsProblem(page.replace('{name}', name));
+        if (problem) bad(`the recordset page of ${name}, ${page.replace('{name}', name)}, ${problem}`);
+      }
+    }
     // A shared model is in another repository, so its entities cannot be read here: the Directory compares.
     if (local && entityNames !== undefined) {
       const missing = entityNames.filter((name) => !listed.has(name));
@@ -538,5 +534,6 @@ function analyseManifest(path, files, { repository } = {}) {
       if (extra.length) bad(`recordsets names things that are not ModelSpec entities: ${extra.join(', ')}`);
     }
   }
+  notes.unshift(`${path}: ${offlineNote}`);
   return { problems, notes };
 }

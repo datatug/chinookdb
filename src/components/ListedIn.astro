@@ -1,4 +1,4 @@
 ---
 import { catalogues } from '../data/catalogues';
 ---
-<section class="shell section listed-in"><div class="section-heading compact"><div><p class="eyebrow">Catalogues</p><h2>Where Chinook is listed.</h2></div></div><div class="big-download-list">{catalogues.map((catalogue) => <a href={catalogue.url}><span><strong>{catalogue.name}</strong><small>{catalogue.text}</small></span><b>→</b></a>)}</div></section>
+<section class="shell section listed-in"><div class="section-heading compact"><div><p class="eyebrow">Catalogues</p><h2>Where Chinook is listed.</h2></div></div><div class="big-download-list">{catalogues.map((catalogue) => <a href={catalogue.url}><span><strong>{catalogue.name}</strong><small>{catalogue.text}</small></span><b aria-hidden="true">→</b></a>)}</div></section>
