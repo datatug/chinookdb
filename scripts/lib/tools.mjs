@@ -10,10 +10,12 @@
 // directory, or a binary of an earlier pin, is refused with a pointer to the installer.
 // What is not: the receipt sits next to the binary, so a local user who can write the directory can replace both.
 // That is a guard against a stale or wrong binary, not against someone with write access to .tools/. CI always
-// runs the installer first in the same job, which replaces both files.
+// runs the installer first in the same job, which replaces both files. Nor is the window between the hash check
+// and the spawn closed: a binary swapped in that moment would run. It takes the same actor, one who can write
+// the directory, so it adds nothing to the limit above.
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -111,6 +113,8 @@ export async function download(url, { fetchImpl = fetch, attempts = 3, sleep = p
     throw last;
   } finally {
     clearTimeout(timer);
+    // Whatever way out (a body, a refusal, an error), nothing of the request stays open: an unread body would keep the process alive.
+    controller.abort();
   }
 }
 
@@ -126,7 +130,7 @@ export function extractWithTar(archive, member, into) {
  * `download` and `extract` are injected by the tests. A wrong hash, a platform with no pin and a failed download
  * throw a ToolsError before anything is unpacked or written to `dir`.
  */
-export async function installTool(name, { pins, dir, platform = process.platform, arch = process.arch, download: fetchArchive = download, extract = extractWithTar }) {
+export async function installTool(name, { pins, dir, platform = process.platform, arch = process.arch, download: fetchArchive = download, extract = extractWithTar, now = Date.now() }) {
   const pin = pins.tools[name];
   if (!pin) throw new ToolsError(`unknown tool ${name}; pinned: ${Object.keys(pins.tools).join(', ')}`, 2);
   const key = platformKey(platform, arch);
@@ -153,6 +157,7 @@ export async function installTool(name, { pins, dir, platform = process.platform
     const receipt = { tool: name, version: pin.version, platform: key, archiveSha256: actual, binarySha256: sha256Hex(binary) };
     try {
       mkdirSync(dir, { recursive: true });
+      sweepStaging(dir, name, now);
       unlinkSync(receiptPath(dir, name)); // a receipt never outlives the binary it describes
     } catch (error) {
       if (error.code !== 'ENOENT') throw new ToolsError(`cannot install ${name} into ${dir}: ${error.message.split('\n')[0]}`);
@@ -160,13 +165,25 @@ export async function installTool(name, { pins, dir, platform = process.platform
     const target = join(dir, name);
     placeFile(target, binary, 0o755);
     placeFile(receiptPath(dir, name), `${JSON.stringify(receipt, null, 2)}\n`, 0o644);
-    return { name, version: pin.version, key, archive, sha256: actual, binarySha256: receipt.binarySha256, path: target };
+    return { name, version: pin.version, key, archive, sha256: actual, binarySha256: receipt.binarySha256, path: target, receipt: receiptPath(dir, name) };
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
 }
 
 const receiptPath = (dir, name) => join(dir, `${name}.receipt.json`);
+
+// A staging file older than this is a leftover of a run that died; a younger one may be another installer's.
+export const stagingMaxAgeMs = 5 * 60 * 1000;
+/** Removes the leftover staging files (`<name>.new-<pid>` and `<name>.receipt.json.new-<pid>`) older than stagingMaxAgeMs. Links are removed, never followed. */
+function sweepStaging(dir, name, now) {
+  const leftover = new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\.receipt\\.json)?\\.new-\\d+$`);
+  for (const entry of readdirSync(dir)) {
+    if (!leftover.test(entry)) continue;
+    const stat = lstatSync(join(dir, entry), { throwIfNoEntry: false });
+    if (stat && !stat.isDirectory() && now - stat.mtimeMs > stagingMaxAgeMs) rmSync(join(dir, entry), { force: true });
+  }
+}
 
 /**
  * Writes `content` to `target` through a staging file made exclusively (O_EXCL: it fails when the name exists and
@@ -177,7 +194,15 @@ function placeFile(target, content, mode) {
   const staged = `${target}.new-${process.pid}`;
   let created = false;
   try {
-    writeFileSync(staged, content, { flag: 'wx', mode });
+    try {
+      writeFileSync(staged, content, { flag: 'wx', mode });
+    } catch (error) {
+      // A leftover of an earlier run (or of one with this pid) must not block the install: remove it (a link is
+      // removed, not followed) and create the file again, still exclusively.
+      if (error.code !== 'EEXIST') throw error;
+      rmSync(staged, { force: true });
+      writeFileSync(staged, content, { flag: 'wx', mode });
+    }
     created = true;
     chmodSync(staged, mode);
     renameSync(staged, target);
@@ -197,18 +222,26 @@ export function locateTool(name, { pins, binDir = defaultBinDir(), platform = pr
   const pin = pins.tools[name];
   if (!pin) throw new ToolsError(`unknown tool ${name}; pinned: ${Object.keys(pins.tools).join(', ')}`, 2);
   const path = join(binDir, name);
-  if (!existsSync(path)) throw new ToolsError(`${name} is not installed in ${binDir}; run: ${installCommand}`, 2);
+  if (!lstatSync(path, { throwIfNoEntry: false })) throw new ToolsError(`${name} is not installed in ${binDir}; run: ${installCommand}`, 2);
   const stale = (why) => new ToolsError(`${path} is not the pinned ${name} ${pin.version} (${why}); run: ${installCommand}`, 2);
+  if (!lstatSync(path).isFile()) throw stale('it is not a regular file');
   let receipt;
   try {
     receipt = JSON.parse(readFileSync(receiptPath(binDir, name), 'utf8'));
   } catch {
     throw stale('no readable receipt from the installer');
   }
+  if (receipt === null || typeof receipt !== 'object' || Array.isArray(receipt)) throw stale('its receipt is not a receipt');
   const key = platformKey(platform, arch);
   if (!key) throw new ToolsError(`no pinned ${name} build for ${platform}/${arch}; pinned platforms: ${platforms.join(', ')}`, 2);
   if (receipt.tool !== name || receipt.version !== pin.version || receipt.platform !== key || receipt.archiveSha256 !== pin.sha256[key]) throw stale('its receipt is of another release or platform');
-  if (!sha256Pattern.test(receipt.binarySha256 ?? '') || sha256Hex(readFileSync(path)) !== receipt.binarySha256) throw stale('the file is not the one the installer installed');
+  let actual;
+  try {
+    actual = sha256Hex(readFileSync(path));
+  } catch {
+    throw stale('the file cannot be read');
+  }
+  if (!sha256Pattern.test(receipt.binarySha256 ?? '') || actual !== receipt.binarySha256) throw stale('the file is not the one the installer installed');
   return path;
 }
 
@@ -221,6 +254,14 @@ export function runTool(name, args, { pins = loadPins(), binDir = defaultBinDir(
   const result = run(path, typeof args === 'function' ? args() : args, { stdio: 'inherit', cwd });
   if (result.error) throw new ToolsError(`cannot run ${path}: ${result.error.message}`, 2);
   return result.status ?? 2;
+}
+
+/** Runs a pinned, installed tool and returns { status, stdout (a Buffer, byte for byte), stderr }, for output that is compared and not shown. */
+export function captureTool(name, args, { pins = loadPins(), binDir = defaultBinDir(), run = spawnSync, cwd = root, platform, arch } = {}) {
+  const path = locateTool(name, { pins, binDir, platform, arch });
+  const result = run(path, args, { cwd, maxBuffer: 16 * 1024 * 1024 });
+  if (result.error) throw new ToolsError(`cannot run ${path}: ${result.error.message}`, 2);
+  return { status: result.status ?? 2, stdout: result.stdout ?? Buffer.alloc(0), stderr: String(result.stderr ?? '') };
 }
 
 /** Runs `main` as a command line: a ToolsError prints its message and exits with its code. */

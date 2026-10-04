@@ -91,10 +91,13 @@ jobs:
         run: pnpm lint:model
       - name: ModelSpec JSON twin is what the HCL exports to
         run: pnpm check:model-twin
-      # The core graph is the checkout of meaninggraph/core at the commit model/chinook.meaning.yaml pins (the cache
-      # above); meaninggraph refuses a checkout at any other commit.
+      # One run checks this graph and, in full, the checkout of meaninggraph/core at the commit
+      # model/chinook.meaning.yaml pins (the cache above); meaninggraph refuses a checkout at any other commit.
       - name: Meaning graph check
         run: pnpm check:meaning
+      # The schema embedded in the pinned meaninggraph is the schema of that same core checkout.
+      - name: Embedded meaning schema is the pinned core's
+        run: pnpm check:schema
       - name: Data drift guard
         env:
           BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}

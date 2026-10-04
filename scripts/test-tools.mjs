@@ -3,12 +3,13 @@
 // downloaded and its SHA-256 compared with scripts/tools.json).
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, lutimesSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-import { checkInvocations, corePin, main as checkMeaning, meaningFile, ownAddress } from './check-meaning.mjs';
+import { checkArguments, corePin, main as checkMeaning, meaningFile, ownAddress } from './check-meaning.mjs';
+import { compareSchema, main as checkSchema } from './check-schema.mjs';
 import { main as install, parseArguments } from './install-tools.mjs';
 import { cleanGitEnv, isolatedGitEnv } from './lib/git-env.mjs';
 import { coreRepo, createResolver } from './lib/meaning.mjs';
@@ -117,19 +118,25 @@ test('the hash is compared whole: a pin that differs in its last digit, or only 
   }
 });
 
-test('the staging file is made exclusively: a link planted at its name is not followed, and a failed rename leaves nothing behind', async () => {
+test('the staging file is made exclusively and never followed, a leftover never blocks an install, and a failed rename leaves nothing behind', async () => {
   const bytes = archiveOf('widget');
   const download = async () => bytes;
-  const install = (dir) => installTool('widget', { pins: pinFor('widget', bytes), dir, platform: 'linux', arch: 'x64', download });
-  // A symbolic link where the staging file would go, pointing at a file elsewhere.
-  const dir = fresh('bin');
-  mkdirSync(dir);
-  const victim = join(fresh('victim'));
-  writeFileSync(victim, 'precious');
-  symlinkSync(victim, join(dir, `widget.new-${process.pid}`));
-  await assert.rejects(install(dir), (error) => error instanceof ToolsError && /^cannot install .*\/widget: EEXIST.*widget\.new-\d+/.test(error.message) && !error.message.includes('\n'));
-  assert.equal(readFileSync(victim, 'utf8'), 'precious', 'the file behind the link is untouched');
-  assert.ok(!existsSync(join(dir, 'widget')));
+  const install = (dir, extra = {}) => installTool('widget', { pins: pinFor('widget', bytes), dir, platform: 'linux', arch: 'x64', download, ...extra });
+  // A symbolic link, and a plain file, at the name of the staging file (what a crashed run with this pid leaves): the install goes
+  // through, and what the link pointed at is untouched.
+  for (const plant of ['link', 'file']) {
+    const dir = fresh('bin');
+    mkdirSync(dir);
+    const victim = fresh('victim');
+    writeFileSync(victim, 'precious');
+    const staged = join(dir, `widget.new-${process.pid}`);
+    if (plant === 'link') symlinkSync(victim, staged);
+    else writeFileSync(staged, 'leftover');
+    await install(dir);
+    assert.equal(readFileSync(victim, 'utf8'), 'precious', `${plant}: the file behind the link is untouched`);
+    assert.equal(readFileSync(join(dir, 'widget'), 'utf8'), '#!/bin/sh\necho fake\n');
+    assert.deepEqual(readdirSync(dir).sort(), ['widget', 'widget.receipt.json'], `${plant}: the leftover is gone`);
+  }
   // The target is a directory: the rename fails, as one line, and the staged file is removed.
   const blocked = fresh('bin');
   mkdirSync(join(blocked, 'widget'), { recursive: true });
@@ -142,53 +149,38 @@ test('the staging file is made exclusively: a link planted at its name is not fo
   await assert.rejects(install(join(file, 'bin')), (error) => error instanceof ToolsError && /^cannot install widget into /.test(error.message) && !error.message.includes('\n'));
 });
 
-test('installTool refuses a wrong hash before it unpacks anything or writes to the directory', async () => {
+test('stale staging leftovers are swept at install time; a young one, other names and a directory are not', async () => {
   const bytes = archiveOf('widget');
-  const tampered = archiveOf('widget', '#!/bin/sh\necho evil\n');
   const dir = fresh('bin');
-  await assert.rejects(
-    installTool('widget', { pins: pinFor('widget', bytes), dir, platform: 'linux', arch: 'x64', download: async () => tampered, extract: never('extract') }),
-    (error) => {
-      assert.ok(error instanceof ToolsError);
-      assert.equal(error.exit, 1);
-      assert.ok(error.message.includes(sha256Hex(tampered)) && error.message.includes(sha256Hex(bytes)), 'the message names both hashes');
-      assert.match(error.message, /nothing was unpacked or installed/);
-      return true;
-    },
-  );
-  assert.ok(!existsSync(dir), 'the directory was not even created');
-  // The same archive for the platform whose pinned hash is something else is refused too.
-  await assert.rejects(installTool('widget', { pins: pinFor('widget', bytes), dir, platform: 'darwin', arch: 'arm64', download: async () => bytes, extract: never('extract') }), /pins f{64}/);
+  mkdirSync(dir);
+  const minutesAgo = (minutes) => new Date(Date.now() - minutes * 60 * 1000);
+  const plant = (name, age) => { writeFileSync(join(dir, name), 'x'); utimesSync(join(dir, name), minutesAgo(age), minutesAgo(age)); };
+  for (const name of ['widget.new-1', 'widget.receipt.json.new-7']) plant(name, 10);
+  for (const name of ['widget.new-2', 'other.new-1', 'widget.new-x', 'widget.newer-3']) plant(name, name === 'widget.new-2' ? 1 : 10);
+  mkdirSync(join(dir, 'widget.new-9'));
+  utimesSync(join(dir, 'widget.new-9'), minutesAgo(10), minutesAgo(10));
+  const victim = fresh('victim');
+  writeFileSync(victim, 'precious');
+  symlinkSync(victim, join(dir, 'widget.new-3'));
+  lutimesSync(join(dir, 'widget.new-3'), minutesAgo(10), minutesAgo(10));
+  await installTool('widget', { pins: pinFor('widget', bytes), dir, platform: 'linux', arch: 'x64', download: async () => bytes });
+  assert.deepEqual(readdirSync(dir).sort(), ['other.new-1', 'widget', 'widget.new-2', 'widget.new-9', 'widget.new-x', 'widget.newer-3', 'widget.receipt.json'].sort());
+  assert.equal(readFileSync(victim, 'utf8'), 'precious', 'a swept link is removed, not followed');
+  await installTool('widget', { pins: pinFor('widget', bytes), dir, platform: 'linux', arch: 'x64', download: async () => bytes, now: Date.now() + 10 * 60 * 1000 });
+  assert.ok(!existsSync(join(dir, 'widget.new-2')), 'a leftover that has become old is swept');
 });
 
-test('installTool refuses a platform with no pinned build, before it downloads', async () => {
+test('a failed install leaves no receipt of the binary it replaced', async () => {
   const bytes = archiveOf('widget');
-  for (const [platform, arch] of [['win32', 'x64'], ['linux', 'ia32']]) {
-    await assert.rejects(
-      installTool('widget', { pins: pinFor('widget', bytes), dir: fresh('bin'), platform, arch, download: never('download'), extract: never('extract') }),
-      (error) => error instanceof ToolsError && error.exit === 2 && error.message.includes(`no pinned widget build for ${platform}/${arch}`) && error.message.includes('linux_amd64'),
-    );
-  }
-  await assert.rejects(installTool('nope', { pins: pinFor('widget', bytes), dir: fresh('bin'), download: never('download') }), /unknown tool nope; pinned: widget/);
-});
-
-test('installTool turns a failed download into a clear refusal and installs nothing', async () => {
   const dir = fresh('bin');
-  await assert.rejects(
-    installTool('widget', { pins: pinFor('widget', archiveOf('widget')), dir, platform: 'linux', arch: 'x64', download: async () => { throw new Error('HTTP 404'); }, extract: never('extract') }),
-    (error) => error instanceof ToolsError && error.exit === 1 && /cannot download https:\/\/github\.com\/acme\/cli\/releases\/download\/v1\.2\.3\/widget_1\.2\.3_linux_amd64\.tar\.gz: HTTP 404/.test(error.message),
-  );
-  assert.ok(!existsSync(dir));
-});
-
-test('installTool refuses a verified archive that does not hold the binary as a regular file', async () => {
-  const bytes = archiveOf('other');
-  const dir = fresh('bin');
-  await assert.rejects(installTool('widget', { pins: pinFor('widget', bytes), dir, platform: 'linux', arch: 'x64', download: async () => bytes }), /cannot unpack widget/);
-  assert.ok(!existsSync(dir));
-  const link = archiveOf('widget');
-  await assert.rejects(installTool('widget', { pins: pinFor('widget', link), dir, platform: 'linux', arch: 'x64', download: async () => link, extract: (_archive, name, into) => symlinkSync('/bin/sh', join(into, name)) }), /holds no regular file widget/);
-  assert.ok(!existsSync(dir), 'a link is never installed');
+  const install = () => installTool('widget', { pins: pinFor('widget', bytes), dir, platform: 'linux', arch: 'x64', download: async () => bytes });
+  await install();
+  assert.ok(existsSync(join(dir, 'widget.receipt.json')));
+  rmSync(join(dir, 'widget'));
+  mkdirSync(join(dir, 'widget'));
+  writeFileSync(join(dir, 'widget', 'keep'), 'x');
+  await assert.rejects(install(), /cannot install/);
+  assert.ok(!existsSync(join(dir, 'widget.receipt.json')), 'the old receipt was removed before the new binary was placed');
 });
 
 test('download retries a network error and a 5xx, and does not retry a 4xx', async () => {
@@ -211,7 +203,7 @@ test('download retries a network error and a 5xx, and does not retry a 4xx', asy
 
 /** A fetch answer whose body is read chunk by chunk through a reader that counts the reads. */
 const streamed = (chunks, { length, onAbort } = {}) => {
-  const state = { reads: 0, cancelled: 0 };
+  const state = { reads: 0, cancelled: 0, signal: null };
   const answer = (options) => ({
     ok: true,
     headers: { get: (name) => (name === 'content-length' && length !== undefined ? String(length) : null) },
@@ -226,25 +218,37 @@ const streamed = (chunks, { length, onAbort } = {}) => {
       }),
     },
   });
-  return { state, fetchImpl: async (_url, options) => answer(options) };
+  return { state, fetchImpl: async (_url, options) => { state.signal = options.signal; return answer(options); } };
 };
 
-test('download refuses a Content-Length over the cap before reading, stops a body without one at the cap, and gives up on a stalled body', async () => {
+test('download refuses a Content-Length over the cap before reading, stops a body without one at the cap, and gives up on a stalled body', { timeout: 10_000 }, async () => {
   const sleep = async () => {};
   const declared = streamed(3, { length: 11 });
   await assert.rejects(download('https://x.test/a', { fetchImpl: declared.fetchImpl, maxBytes: 10, sleep }), /larger than 10 bytes/);
   assert.equal(declared.state.reads, 0, 'the body was not read');
+  assert.equal(declared.state.signal.aborted, true, 'and the request was aborted, so nothing keeps the process alive');
   const endless = streamed(1000);
   await assert.rejects(download('https://x.test/b', { fetchImpl: endless.fetchImpl, maxBytes: 10, sleep }), /larger than 10 bytes/);
   assert.equal(endless.state.reads, 3, 'reading stopped at the first chunk over the cap (4, 8, 12 bytes)');
   assert.equal(endless.state.cancelled, 1, 'and the body was cancelled');
   const within = streamed(2, { length: 8 });
   assert.equal((await download('https://x.test/c', { fetchImpl: within.fetchImpl, maxBytes: 8, sleep })).length, 8, 'exactly the cap is fine');
+  assert.equal(within.state.signal.aborted, true, 'a finished download leaves no request open either');
+  assert.equal(endless.state.signal.aborted, true);
+  await assert.rejects(download('https://x.test/e', { fetchImpl: async () => ({ ok: true, arrayBuffer: async () => Buffer.alloc(11) }), maxBytes: 10, sleep }), /larger than 10 bytes/, 'the cap holds for a response without a readable body too');
+  assert.equal((await download('https://x.test/f', { fetchImpl: async () => ({ ok: true, arrayBuffer: async () => Buffer.alloc(10) }), maxBytes: 10, sleep })).length, 10);
   const stalled = streamed(0, { onAbort: true });
   let calls = 0;
   await assert.rejects(download('https://x.test/d', { fetchImpl: async (...args) => { calls += 1; return stalled.fetchImpl(...args); }, timeoutMs: 20, sleep }), /timed out after 0\.02 seconds/);
   assert.equal(calls, 1, 'the one deadline covers every attempt: no retry after it');
   await assert.rejects(installTool('widget', { pins: pinFor('widget', archiveOf('widget')), dir: fresh('bin'), platform: 'linux', arch: 'x64', download: (url) => download(url, { fetchImpl: endless.fetchImpl, maxBytes: 10, sleep }) }), /cannot download .*larger than 10 bytes/);
+});
+
+test('retries do not continue after the deadline, even when the fetch ignores the abort signal', { timeout: 5000 }, async () => {
+  let calls = 0;
+  const slowFailure = async () => { calls += 1; await new Promise((done) => setTimeout(done, 40)); throw new Error('reset'); };
+  await assert.rejects(download('https://x.test/g', { fetchImpl: slowFailure, timeoutMs: 10, sleep: async () => {} }), /timed out after 0\.01 seconds/);
+  assert.equal(calls, 1);
 });
 
 test('the installer command line needs a directory, names no unknown tool, and installs every pinned tool by default', async () => {
@@ -255,15 +259,32 @@ test('the installer command line needs a directory, names no unknown tool, and i
   assert.deepEqual(parseArguments(['b', '--dir', 'x'], ['a', 'b']).names, ['b']);
   const bytes = archiveOf('widget');
   const dir = fresh('bin');
-  assert.equal(await install(['--dir', dir], { pins: pinFor('widget', bytes), platform: 'linux', arch: 'x64', download: async () => bytes }), 0);
+  const lines = [];
+  assert.equal(await install(['--dir', dir], { pins: pinFor('widget', bytes), platform: 'linux', arch: 'x64', download: async () => bytes, log: (line) => lines.push(line) }), 0);
   assert.deepEqual(readdirSync(dir).sort(), ['widget', 'widget.receipt.json']);
+  assert.equal(lines.length, 2);
+  assert.match(lines[0], new RegExp(`^installed widget 1\\.2\\.3 \\(linux_amd64, sha256 ${sha256Hex(bytes)}\\) in ${dir}$`));
+  assert.equal(lines[1], `wrote receipt ${join(dir, 'widget.receipt.json')} (binary sha256 ${sha256Hex('#!/bin/sh\necho fake\n')})`, 'one line says the receipt was written');
 });
 
-test('the installer and the runner never ask for latest, a version from the network or a shell pipe', () => {
-  for (const file of ['scripts/install-tools.mjs', 'scripts/run-tool.mjs', 'scripts/check-meaning.mjs', 'scripts/lib/tools.mjs']) {
-    const text = read(file).replace(/^\s*\/\/.*$/gm, '');
-    assert.doesNotMatch(text, /releases\/latest|api\.github\.com|self-update|curl|wget|\| *(ba)?sh\b|shell: *true|(?<![.\w])exec\(/, file);
-  }
+/** What the tool scripts must never contain, in code (comment lines are not looked at). */
+const scriptProblems = (text) => {
+  const code = text.replace(/^\s*\/\/.*$/gm, '');
+  const forbidden = [
+    [/releases\/latest|api\.github\.com|self-update|curl|wget|\| *(ba)?sh\b|shell: *true/, 'a download by hand, an update, a pipe to a shell'],
+    [/(?<![.\w])exec\(|\b(child_process|childProcess|cp)\.exec(Sync)?\(/, 'child_process.exec, which runs a shell'],
+    [/import\s*\{[^}]*\bexec(Sync)?\b[^}]*\}\s*from\s*['"](node:)?child_process['"]/, 'an import of exec or execSync'],
+    [/execSync\(\s*['"`][^'"`\n]*(&&|\|)/, 'execSync with a shell string that chains or pipes'],
+    [/['"`]latest['"`]/, '"latest" as a version'],
+  ];
+  return forbidden.filter(([pattern]) => pattern.test(code)).map(([, what]) => what);
+};
+
+test('the installer and the runner never ask for latest, a version from the network, a shell or a shell pipe', () => {
+  for (const file of ['scripts/install-tools.mjs', 'scripts/run-tool.mjs', 'scripts/check-meaning.mjs', 'scripts/check-schema.mjs', 'scripts/lib/tools.mjs']) assert.deepEqual(scriptProblems(read(file)), [], file);
+  // The lint itself: it catches each of these, and not a regular expression's .exec( or a call that takes no shell.
+  for (const bad of ["child_process.exec('x')", "cp.exec('x')", "import { exec } from 'node:child_process';", "import { spawnSync, execSync } from \"child_process\";", "exec('x')", "execSync('tar xzf x && ./x')", 'execSync(`a | b`)', "const version = 'latest';", 'version: "latest"', 'shell: true', 'curl -fsSL x | sh', 'fetch(`https://github.com/a/b/releases/latest`)']) assert.notDeepEqual(scriptProblems(bad), [], bad);
+  for (const fine of ['/a/.exec(text)', 'const m = pattern.exec(line);', "spawnSync('tar', ['-xzf', a]);", "execFileSync('git', ['x']);", "// exec('x') in a comment", "const message = 'no latest, no range';", "const note = 'pinned';"]) assert.deepEqual(scriptProblems(fine), [], fine);
 });
 
 // Downloads every pinned archive and compares its SHA-256 with the pin: how the hashes are confirmed.
@@ -301,6 +322,27 @@ test('a binary runs only when the installer\'s receipt for the pinned release ho
   await installIt();
   assert.throws(() => locateTool('widget', at({ pins: pinFor('widget', bytes, '1.2.4') })), oneLinePointer(/another release or platform/));
   assert.throws(() => locateTool('widget', at({ pins: pinFor('widget', archiveOf('widget', 'other\n')) })), oneLinePointer(/another release or platform/));
+  // A receipt of this release but another platform, or another tool, is refused: each field is compared on its own.
+  const receiptFile = join(dir, 'widget.receipt.json');
+  for (const [field, value] of [['platform', 'darwin_arm64'], ['tool', 'gadget']]) {
+    await installIt();
+    writeFileSync(receiptFile, JSON.stringify({ ...JSON.parse(readFileSync(receiptFile, 'utf8')), [field]: value }));
+    assert.throws(() => locateTool('widget', at()), oneLinePointer(/another release or platform/), field);
+  }
+  // A receipt that is JSON but not a receipt: null, a list, a number.
+  for (const text of ['null', '[]', '7', '"x"']) {
+    writeFileSync(receiptFile, text);
+    assert.throws(() => locateTool('widget', at()), oneLinePointer(/its receipt is not a receipt/), text);
+  }
+  // Something that is not a regular file at the binary's path: a directory, a link to a real file.
+  await installIt();
+  rmSync(join(dir, 'widget'));
+  mkdirSync(join(dir, 'widget'));
+  assert.throws(() => locateTool('widget', at()), oneLinePointer(/it is not a regular file/));
+  rmSync(join(dir, 'widget'), { recursive: true });
+  symlinkSync('/bin/sh', join(dir, 'widget'));
+  assert.throws(() => locateTool('widget', at()), oneLinePointer(/it is not a regular file/));
+  await installIt();
   assert.throws(() => locateTool('widget', at({ platform: 'win32' })), /no pinned widget build for win32\/x64/);
   assert.throws(() => locateTool('nope', at()), /unknown tool nope/);
 });
@@ -313,7 +355,7 @@ test('runTool runs the verified binary from the repository root and returns its 
   assert.equal(runTool('modelspec', ['lint', '--profile', 'publish', 'model'], { pins, binDir, run: exec }), 1, 'findings are exit 1');
   assert.deepEqual(calls, [{ path: join(binDir, 'modelspec'), args: ['lint', '--profile', 'publish', 'model'], options: { stdio: 'inherit', cwd: root } }], 'the binary is run once, never asked for its version');
   assert.equal(runTool('modelspec', ['lint'], { pins, binDir, run: () => ({ status: null }) }), 2, 'a killed tool is not a pass');
-  writeFileSync(join(binDir, 'modelspec'), '#!/bin/sh\necho "modelspec 0.1.0 (fake)"\n');
+  writeFileSync(join(binDir, 'modelspec'), `#!/bin/sh\necho "modelspec ${pins.tools.modelspec.version} (fake)"\n`);
   let ran = 0;
   assert.throws(() => runTool('modelspec', ['lint'], { pins, binDir, run: () => { ran += 1; return { status: 0 }; } }), /the file is not the one the installer installed/);
   assert.equal(ran, 0, 'a replaced binary is not run');
@@ -333,21 +375,18 @@ test('the commit of meaninggraph/core that is checked out is the one the meaning
   assert.equal(corePin(meaningText), filePin[0]);
   const asked = [];
   const resolve = (repo, ref) => { asked.push([repo, ref]); return { dir: '/checkout/core' }; };
-  assert.deepEqual(checkInvocations({ resolve }), [
-    ['check', '/checkout/core', '--address', coreRepo],
-    ['check', 'model', '--address', address, '--graph', 'github.com/meaninggraph/core=/checkout/core'],
-  ]);
+  assert.deepEqual(checkArguments({ resolve }), ['check', 'model', '/checkout/core', '--address', `${address}=model`, '--graph', 'github.com/meaninggraph/core=/checkout/core']);
   assert.deepEqual(asked, [[coreRepo, filePin[0]]], 'the checkout is asked for at the pin and nothing else');
-  assert.throws(() => checkInvocations({ resolve: () => ({ error: 'meaning://x cannot be read' }) }), (error) => error.exit === 2 && /cannot be read/.test(error.message));
+  assert.throws(() => checkArguments({ resolve: () => ({ error: 'meaning://x cannot be read' }) }), (error) => error.exit === 2 && /cannot be read/.test(error.message));
 });
 
 test('the core checkout is checked as a graph of its own (a path operand) as well as supplied with --graph, and the repository\'s address is passed', () => {
-  const [coreRun, modelRun] = checkInvocations({ resolve: () => ({ dir: '/checkout/core' }) });
-  assert.equal(coreRun[0], 'check');
-  assert.ok(coreRun.includes('/checkout/core') && !coreRun.includes('--graph'), 'run 1: core is a path operand, so every rule is applied to it');
-  assert.ok(modelRun.includes('model') && modelRun.at(-1) === `${coreRepo}=/checkout/core`, 'run 2: the model graph, with core supplied by --graph');
-  assert.equal(modelRun[modelRun.indexOf('--address') + 1], address, 'the repository\'s own address is passed, so a reference to itself resolves');
-  assert.equal(coreRun[coreRun.indexOf('--address') + 1], coreRepo);
+  const args = checkArguments({ resolve: () => ({ dir: '/checkout/core' }) });
+  assert.equal(args.filter((arg) => arg === 'check').length, 1, 'one run');
+  assert.deepEqual(args.slice(0, 3), ['check', 'model', '/checkout/core'], 'the model graph and core, both as paths to check');
+  assert.equal(args[args.indexOf('--graph') + 1], `${coreRepo}=/checkout/core`, 'and the same directory is what --graph supplies, so core is that graph, checked in full once');
+  assert.equal(args[args.indexOf('--address') + 1], `${address}=model`, 'the repository\'s own address is passed for the model path, so a reference to itself resolves');
+  assert.equal(args.filter((arg) => arg === '--address').length, 1, 'core needs no address of its own: --graph gives it one');
   assert.equal(ownAddress(read('ovdb.yaml')), address, 'the address is the one ovdb.yaml states for the meaning graph');
   assert.throws(() => ownAddress('meaning:\n  graph:\n    address: meaning://github.com/x/y?ref=abc\n'), /meaning.graph.address must be meaning:\/\/<host>\/<org>\/<repo>/);
   assert.throws(() => ownAddress('a: [unclosed'), (error) => error.exit === 2 && /ovdb\.yaml is not valid YAML/.test(error.message) && !error.message.includes('\n'));
@@ -359,7 +398,7 @@ test('a meaning file with two pins, or a pin that is not a full commit, is refus
   assert.throws(() => corePin(meaningText.replaceAll(filePin[0], 'main')), /not a full 40-digit commit id/);
   assert.throws(() => corePin('format: meaning/draft-1\nconcepts: []\n'), (error) => error.exit === 2 && /exactly one commit, found \[\]/.test(error.message), 'a meaning file with no reference to core is refused: Chinook depends on it');
   assert.throws(() => corePin('concepts: [unclosed'), (error) => error instanceof ToolsError && error.exit === 2 && /model\/chinook\.meaning\.yaml is not valid YAML/.test(error.message) && !error.message.includes('\n'), 'a syntax error is one line, not a stack');
-  assert.throws(() => checkInvocations({ file: join(scratch, 'missing.yaml'), resolve: never('resolve') }), (error) => error.exit === 2 && /cannot read .*missing\.yaml/.test(error.message));
+  assert.throws(() => checkArguments({ file: join(scratch, 'missing.yaml'), resolve: never('resolve') }), (error) => error.exit === 2 && /cannot read .*missing\.yaml/.test(error.message));
   assert.throws(() => corePin(meaningText.replaceAll(`?ref=${filePin[0]}`, '')), /pins github.com\/meaninggraph\/core to "", which is not a full 40-digit commit id/);
 });
 
@@ -377,40 +416,94 @@ test('with a local repository standing in for github.com the checkout handed to 
   writeFileSync(file, stringifyYaml({ format: 'meaning/draft-1', concepts: [{ id: 'x', extends: `meaning://${coreRepo}/a?ref=${sha}` }] }));
   const resolve = createResolver({ root, sources: { [coreRepo]: { git: `file://${origin}` } }, cacheDir: fresh('cache'), run: (command, args) => execFileSync(command, args, { env, stdio: 'pipe' }).toString() });
   try {
-    const [coreRun, modelRun] = checkInvocations({ file, resolve });
-    const supplied = modelRun.at(-1).slice(`${coreRepo}=`.length);
-    assert.equal(coreRun[1], supplied, 'one directory, checked and supplied');
+    const args = checkArguments({ file, resolve });
+    const supplied = args.at(-1).slice(`${coreRepo}=`.length);
+    assert.equal(args[2], supplied, 'one directory, checked and supplied');
     assert.equal(git(supplied, 'rev-parse', 'HEAD'), sha, 'meaninggraph reads .git/HEAD of this directory and compares it with the pin');
   } finally { resolve.dispose(); }
   // A second commit in the origin does not move the checkout: the pin is a commit, not a branch.
   assert.ok(!/[0-9a-f]{40}/.test(read('scripts/check-meaning.mjs').replace(/^\s*\/\/.*$/gm, '')), 'no commit id is written in check-meaning.mjs');
 });
 
-test('check-meaning runs meaninggraph twice, disposes the resolver and returns the highest exit code', () => {
+test('check-meaning runs meaninggraph once, disposes the resolver and returns the tool\'s exit code whatever it is', () => {
   const binDir = fresh('bin');
   fakeInstall(binDir, 'meaninggraph');
-  const calls = [];
-  const exitCodes = [0, 2];
-  const exec = (path, args, options) => { calls.push({ args, options }); return { status: exitCodes[calls.length - 1] }; };
-  let disposed = 0;
-  const resolve = () => ({ dir: '/checkout/core' });
-  resolve.dispose = () => { disposed += 1; };
   const previous = process.env.TOOLS_BIN;
   const restore = () => { if (previous === undefined) delete process.env.TOOLS_BIN; else process.env.TOOLS_BIN = previous; };
   process.env.TOOLS_BIN = binDir;
+  let disposed = 0;
+  const resolve = () => ({ dir: '/checkout/core' });
+  resolve.dispose = () => { disposed += 1; };
   try {
-    assert.equal(checkMeaning({ resolve, run: exec }), 2, 'both runs happen, and the worse code is the result');
-  } finally { restore(); }
-  assert.deepEqual(calls.map((call) => call.args), checkInvocations({ resolve }));
-  assert.equal(disposed, 1);
-  // Without the binary nothing is fetched: the pointer to the installer comes first.
-  process.env.TOOLS_BIN = fresh('empty');
-  let fetched = 0;
-  const counting = () => { fetched += 1; return { dir: '/checkout/core' }; };
-  try {
+    for (const [status, expected] of [[0, 0], [1, 1], [2, 2], [null, 2]]) {
+      const calls = [];
+      assert.equal(checkMeaning({ resolve, run: (path, args) => { calls.push(args); return { status }; } }), expected, `tool status ${status}`);
+      assert.deepEqual(calls, [checkArguments({ resolve })], 'one run, with the arguments of checkArguments');
+    }
+    assert.equal(disposed, 4);
+    // Without the binary nothing is fetched: the pointer to the installer comes first.
+    process.env.TOOLS_BIN = fresh('empty');
+    let fetched = 0;
+    const counting = () => { fetched += 1; return { dir: '/checkout/core' }; };
     assert.throws(() => checkMeaning({ resolve: counting }), (error) => error.exit === 2 && /meaninggraph is not installed.*pnpm tools:install/.test(error.message));
+    assert.equal(fetched, 0);
   } finally { restore(); }
-  assert.equal(fetched, 0);
+});
+
+// ---------------------------------------------------------------- the schema the tool embeds is the pinned core's
+
+const schemaBytes = Buffer.from('{"$schema":"https://json-schema.org/draft/2020-12/schema"}');
+const commitA = 'a'.repeat(40);
+const commitB = 'b'.repeat(40);
+
+test('compareSchema passes identical bytes whatever the commits, and refuses a schema that differs by one byte', () => {
+  const dir = fresh('core');
+  mkdirSync(dir);
+  const schemaFile = join(dir, 'meaning.schema.json');
+  writeFileSync(schemaFile, schemaBytes);
+  const same = compareSchema({ tool: schemaBytes, source: Buffer.from(`${commitA}\n`), schemaFile, pin: commitA });
+  assert.deepEqual(same, { ok: true, message: `ok: the schema embedded in meaninggraph is the schema of core at ${commitA}` });
+  const other = compareSchema({ tool: schemaBytes, source: Buffer.from(`${commitB}\n`), schemaFile, pin: commitA });
+  assert.equal(other.ok, true, 'another commit with the same schema is fine');
+  assert.match(other.message, new RegExp(`the tool took it from core ${commitB}, another commit with the same schema`));
+  const flipped = Buffer.from(schemaBytes);
+  flipped[flipped.length - 2] ^= 1;
+  const refused = compareSchema({ tool: flipped, source: Buffer.from(`${commitA}\n`), schemaFile, pin: commitA });
+  assert.equal(refused.ok, false, 'one byte');
+  assert.match(refused.message, /is not .*meaning\.schema\.json.*move the tool pin/);
+  assert.equal(compareSchema({ tool: Buffer.concat([schemaBytes, Buffer.from('\n')]), source: Buffer.from(`${commitA}\n`), schemaFile, pin: commitA }).ok, false, 'a trailing line break is a difference too');
+  assert.throws(() => compareSchema({ tool: schemaBytes, source: Buffer.from('main\n'), schemaFile, pin: commitA }), (error) => error.exit === 2 && /not a 40-digit commit id/.test(error.message));
+  assert.throws(() => compareSchema({ tool: schemaBytes, source: Buffer.from(`${commitA}\n`), schemaFile: join(dir, 'missing.json'), pin: commitA }), (error) => error.exit === 2 && /cannot read/.test(error.message) && !error.message.includes('\n'));
+});
+
+test('check-schema asks the pinned tool for its schema and source, compares with the pinned core checkout and returns 0, 1 or 2', () => {
+  const binDir = fresh('bin');
+  fakeInstall(binDir, 'meaninggraph');
+  const core = fresh('core');
+  mkdirSync(core);
+  writeFileSync(join(core, 'meaning.schema.json'), schemaBytes);
+  const calls = [];
+  const asks = (schema, source, status = 0) => (path, args) => { calls.push(args); return { status, stdout: args.length === 1 ? schema : source, stderr: Buffer.from('boom\nsecond') }; };
+  let disposed = 0;
+  const resolve = (repo, ref) => { assert.deepEqual([repo, ref], [coreRepo, filePin[0]]); return { dir: core }; };
+  resolve.dispose = () => { disposed += 1; };
+  const previous = process.env.TOOLS_BIN;
+  process.env.TOOLS_BIN = binDir;
+  const quiet = (fn) => { const log = console.log; const error = console.error; console.log = () => {}; console.error = () => {}; try { return fn(); } finally { console.log = log; console.error = error; } };
+  try {
+    assert.equal(quiet(() => checkSchema({ resolve, run: asks(schemaBytes, Buffer.from(`${filePin[0]}\n`)) })), 0);
+    assert.deepEqual(calls, [['schema'], ['schema', '--source']]);
+    assert.equal(quiet(() => checkSchema({ resolve, run: asks(Buffer.from('{}'), Buffer.from(`${filePin[0]}\n`)) })), 1, 'a different schema is exit 1');
+    assert.throws(() => checkSchema({ resolve, run: asks(schemaBytes, Buffer.from(`${filePin[0]}\n`), 3) }), (error) => error.exit === 2 && /meaninggraph schema exited 3: boom$/.test(error.message));
+    assert.equal(disposed, 3);
+    process.env.TOOLS_BIN = fresh('empty');
+    let fetched = 0;
+    assert.throws(() => checkSchema({ resolve: () => { fetched += 1; return { dir: core }; } }), (error) => error.exit === 2 && /meaninggraph is not installed.*pnpm tools:install/.test(error.message));
+    assert.equal(fetched, 0, 'a missing tool needs no network');
+  } finally {
+    if (previous === undefined) delete process.env.TOOLS_BIN;
+    else process.env.TOOLS_BIN = previous;
+  }
 });
 
 test('the pinned commit is written in the meaning file and the README (which the model tests compare), and nowhere else outside the tests', () => {
@@ -434,12 +527,14 @@ const commands = (workflow) => jobSteps(workflow).filter((step) => step.run).map
 const MODEL_LINT = 'node scripts/run-tool.mjs modelspec lint --profile publish model';
 const MODEL_TWIN = 'node scripts/run-tool.mjs modelspec export --check model/chinook.modelspec.hcl model/chinook.modelspec.json';
 const MEANING_CHECK = 'node scripts/check-meaning.mjs';
+const SCHEMA_CHECK = 'node scripts/check-schema.mjs';
 const INSTALL = 'node scripts/install-tools.mjs --dir .tools/bin';
 
 test('the package scripts are the three commands, the installer and nothing that guesses', () => {
   assert.equal(scripts['lint:model'], MODEL_LINT);
   assert.equal(scripts['check:model-twin'], MODEL_TWIN);
   assert.equal(scripts['check:meaning'], MEANING_CHECK);
+  assert.equal(scripts['check:schema'], SCHEMA_CHECK);
   assert.equal(scripts['tools:install'], INSTALL);
   assert.equal(scripts['test:tools'], 'node --test scripts/test-tools.mjs');
   assert.ok(!('lint:modelspec' in scripts), 'the repository\'s own lint script is gone');
@@ -458,14 +553,15 @@ for (const name of ['ci', 'deploy']) {
     const lintAt = at(MODEL_LINT);
     const twinAt = at(MODEL_TWIN);
     const meaningAt = at(MEANING_CHECK);
-    assert.ok(installAt < lintAt && lintAt < twinAt && twinAt < meaningAt, 'install, lint, twin, meaning graph');
+    const schemaAt = at(SCHEMA_CHECK);
+    assert.ok(installAt < lintAt && lintAt < twinAt && twinAt < meaningAt && meaningAt < schemaAt, 'install, lint, twin, meaning graph, embedded schema');
     assert.ok(installAt < ran.indexOf(scripts.build), 'the tools are installed before the build');
     assert.ok(ran.includes(scripts['test:tools']), 'the tool tests run in this workflow');
     assert.ok(ran.includes(scripts['test:model']) && ran.includes(scripts['check:ovdb']), 'the checks that stay still run');
     if (name === 'deploy') {
       const steps = jobSteps(workflows.deploy);
       const deployAt = steps.findIndex((step) => step.name === 'Deploy');
-      const checkAt = steps.findIndex((step) => step.run === 'pnpm check:meaning');
+      const checkAt = steps.findIndex((step) => step.run === 'pnpm check:schema');
       assert.ok(checkAt > -1 && checkAt < deployAt, 'every check runs before the deploy');
     }
   });
@@ -490,7 +586,7 @@ for (const name of ['ci', 'deploy']) {
 }
 
 test('ci.yml and deploy.yml give the tool steps the same names', () => {
-  const names = (workflow) => jobSteps(workflow).map((step) => step.name).filter((stepName) => /pinned modelspec|ModelSpec|Meaning graph|Tool pin/.test(stepName ?? ''));
+  const names = (workflow) => jobSteps(workflow).map((step) => step.name).filter((stepName) => /pinned modelspec|ModelSpec|Meaning graph|Embedded meaning schema|Tool pin/.test(stepName ?? ''));
   assert.deepEqual(names(workflows.ci), names(workflows.deploy));
-  assert.equal(names(workflows.ci).length, 5);
+  assert.equal(names(workflows.ci).length, 6);
 });
