@@ -11,18 +11,25 @@ permissions:
 jobs:
   site:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      # Actions are pinned by full commit SHA (the tag is in the comment), as in deploy.yml.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: pnpm/action-setup@v4
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
         with:
           version: 9
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # modelspec and meaninggraph at the release and SHA-256 pinned in scripts/tools.json: the installer refuses
+      # an archive whose hash differs, and puts the binaries in .tools/bin.
+      - name: Install the pinned modelspec and meaninggraph
+        run: pnpm tools:install
       - run: pnpm build
       - run: pnpm validate
       - run: pnpm test:data
@@ -31,7 +38,7 @@ jobs:
       # under its id (the key changes with the pin) and verified before use; when the cache is
       # empty the test fetches the commit, retrying on network errors.
       - name: Cache the pinned meaninggraph/core checkout
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .cache/meaning-sources
           key: meaning-sources-${{ hashFiles('model/*.meaning.yaml') }}
@@ -45,10 +52,18 @@ jobs:
             echo "::error::model/ differs from what pnpm generate writes; run pnpm generate and commit the result"
             exit 1
           fi
-      - name: ModelSpec lint (specscore graph lint)
-        run: pnpm lint:modelspec
+      - name: ModelSpec lint (publish profile)
+        run: pnpm lint:model
+      - name: ModelSpec JSON twin is what the HCL exports to
+        run: pnpm check:model-twin
+      # The core graph is the checkout of meaninggraph/core at the commit model/chinook.meaning.yaml pins (the cache
+      # above); meaninggraph refuses a checkout at any other commit.
+      - name: Meaning graph check
+        run: pnpm check:meaning
       - name: Data drift guard
         env:
           BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
         run: pnpm check:drift "$BASE"
       - run: pnpm test:worker
+      - name: Tool pin, installer and workflow tests
+        run: pnpm test:tools

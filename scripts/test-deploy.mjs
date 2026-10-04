@@ -215,7 +215,8 @@ const identity = step => (step.uses ? `uses ${step.uses.replace(/@.*$/, '')} ${J
 
 test('deploy.yml runs every step of ci.yml, whatever its command, in the same order, unconditionally, and before the deploy', () => {
   const deploy = index(named('Deploy'));
-  assert.ok(ci.length >= 12, 'ci.yml has its steps');
+  assert.ok(ci.length >= 18, 'ci.yml has its steps');
+  for (const wanted of ['pnpm tools:install', 'pnpm lint:model', 'pnpm check:model-twin', 'pnpm check:meaning', 'pnpm test:tools']) assert.ok(ci.some((step) => step.run.trim() === wanted), `ci.yml runs ${wanted}`);
   let last = -1;
   for (const wanted of ci) {
     const mine = steps.find(step => identity(step) === identity(wanted));

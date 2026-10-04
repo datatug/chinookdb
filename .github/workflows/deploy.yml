@@ -61,6 +61,10 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # modelspec and meaninggraph at the release and SHA-256 pinned in scripts/tools.json: the installer refuses
+      # an archive whose hash differs, and puts the binaries in .tools/bin.
+      - name: Install the pinned modelspec and meaninggraph
+        run: pnpm tools:install
       - run: pnpm build
       - run: pnpm validate
       - run: pnpm test:data
@@ -83,13 +87,21 @@ jobs:
             echo "::error::model/ differs from what pnpm generate writes; run pnpm generate and commit the result"
             exit 1
           fi
-      - name: ModelSpec lint (specscore graph lint)
-        run: pnpm lint:modelspec
+      - name: ModelSpec lint (publish profile)
+        run: pnpm lint:model
+      - name: ModelSpec JSON twin is what the HCL exports to
+        run: pnpm check:model-twin
+      # The core graph is the checkout of meaninggraph/core at the commit model/chinook.meaning.yaml pins (the cache
+      # above); meaninggraph refuses a checkout at any other commit.
+      - name: Meaning graph check
+        run: pnpm check:meaning
       - name: Data drift guard
         env:
           BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
         run: pnpm check:drift "$BASE"
       - run: pnpm test:worker
+      - name: Tool pin, installer and workflow tests
+        run: pnpm test:tools
       - name: Deploy marker tests
         run: node --test scripts/test-deploy.mjs
 
