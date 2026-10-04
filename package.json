@@ -12,7 +12,11 @@
     "validate": "node scripts/validate-data.mjs",
     "test:data": "node --test scripts/test-data.mjs",
     "test:model": "node --test scripts/test-model.mjs",
-    "lint:modelspec": "bash scripts/lint-modelspec.sh",
+    "test:tools": "node --test scripts/test-tools.mjs",
+    "tools:install": "node scripts/install-tools.mjs --dir .tools/bin",
+    "lint:model": "node scripts/run-tool.mjs modelspec lint --profile publish model",
+    "check:model-twin": "node scripts/run-tool.mjs modelspec export --check model/chinook.modelspec.hcl model/chinook.modelspec.json",
+    "check:meaning": "node scripts/check-meaning.mjs",
     "check:ovdb": "node scripts/check-ovdb-manifest.mjs --repository https://github.com/datatug/chinookdb",
     "check:drift": "node scripts/check-data-drift.mjs",
     "test:worker": "node --import tsx/esm scripts/test-worker.ts"
@@ -24,8 +28,6 @@
   "devDependencies": {
     "@astrojs/check": "^0.9.4",
     "@types/node": "^22.15.0",
-    "ajv": "^8.20.0",
-    "ajv-formats": "^3.0.1",
     "tsx": "^4.19.2",
     "typescript": "^5.9.2",
     "wrangler": "^4.38.0"

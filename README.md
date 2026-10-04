@@ -87,26 +87,84 @@ them, and they mean different things:
   The known values that the data is checked against ("USA" is the United
   States) come from this key only.
 
-The universal concepts and the meaning-file schema both come from the public
-repository [`meaninggraph/core`](https://github.com/meaninggraph/core), and
-nothing from it is copied into this one. A concept is referred to as
+The universal concepts come from the public repository
+[`meaninggraph/core`](https://github.com/meaninggraph/core), and nothing from it
+is copied into this one. The meaning-file schema (`meaning.schema.json`) is the
+copy embedded in the `meaninggraph` binary, not the one in the checkout (the
+tool does not read the checkout's); the two are byte-identical at the pinned
+commit (the tool's release records the core commit its schema was taken from).
+`meaninggraph` has no command that prints its embedded schema, so nothing here
+compares them: when the pin moves to a commit whose schema changed, move the
+tool pin too. A concept is referred to as
 `meaning://github.com/meaninggraph/core/<concept>?ref=<commit>`, and every
 reference carries the same full 40-character commit id (the check fails on a
 mix, and on a branch or tag in place of a commit). The pinned commit is
 `cb97dbcd9e951b00e7d46cb2e0c4e120c24c8db7` (the check fails if this paragraph
 names another). To move to a newer version, change that id in every reference
 of `model/chinook.meaning.yaml` and in this paragraph, run `pnpm generate` (it
-rewrites `model/checksums.json`) and run `pnpm test:model`.
+rewrites `model/checksums.json`) and run `pnpm check:meaning` and `pnpm test:model`.
+A meaning file with no reference to `meaninggraph/core` is refused by
+`pnpm check:meaning` (exit 2): this graph depends on it.
 
-`pnpm test:model` fetches that one commit (a shallow `git fetch` of the pinned
-id into `.cache/meaning-sources/<commit>`, retried on network errors, git-ignored)
-and reads the concepts and the schema from the same checkout; the resolver in
-`scripts/lib/meaning.mjs` returns its directory and nothing else names a path
-in it. The commit is immutable, so a checkout kept under its id is reused
-without touching the network once it has been made that commit again (tracked
-files rewritten, every untracked or ignored file removed; a checkout that still
-differs is fetched anew); CI caches the directory keyed by the meaning files. Set
-`MEANING_CACHE_DIR` to keep the cache elsewhere.
+`pnpm check:meaning` and `pnpm test:model` both fetch that one commit (a shallow
+`git fetch` of the pinned id into `.cache/meaning-sources/<commit>`, retried on
+network errors, git-ignored). `pnpm check:meaning` reads the commit from the
+meaning file's own references (nowhere else writes it) and runs `meaninggraph`
+twice: on the checkout itself, as a graph in its own right (every rule applies
+to the universal concepts at the pin), and on `model/` with the checkout supplied
+by `--graph` and this repository's own address (from `ovdb.yaml`) passed as
+`--address`, so a reference from the meaning file to its own repository resolves.
+The tool refuses a checkout at any other commit than the pin;
+`pnpm test:model` reads the known values of the universal concepts (the
+countries) from the same checkout. The resolver in `scripts/lib/meaning.mjs`
+returns its directory. The commit is immutable, so a checkout kept under its id
+is reused without touching the network once it has been made that commit again
+(tracked files rewritten, every untracked or ignored file removed; a checkout
+that still differs is fetched anew); CI caches the directory keyed by the meaning
+files. Set `MEANING_CACHE_DIR` to keep the cache elsewhere.
+
+### Validating the model and the meaning locally
+
+Two released command-line tools validate the model and the meaning graph:
+[`modelspec`](https://github.com/modelspec-org/cli) and
+[`meaninggraph`](https://github.com/meaninggraph/cli). Both are pinned by version
+and by the SHA-256 of each release archive in `scripts/tools.json`
+(linux and macOS, amd64 and arm64; on Windows use WSL). Install them once, then
+run the three checks CI runs:
+
+```sh
+pnpm tools:install      # downloads the pinned archives into .tools/bin and checks each SHA-256 before unpacking
+pnpm lint:model         # modelspec lint --profile publish model
+pnpm check:model-twin   # modelspec export --check: model/chinook.modelspec.json is what the HCL exports to
+pnpm check:meaning      # meaninggraph check <core checkout>, then meaninggraph check model --graph github.com/meaninggraph/core=<same checkout>
+```
+
+Each command exits 0 when clean, 1 on findings and 2 when it could not run; when
+`.tools/bin` lacks a tool, or holds another release than the pinned one, it says so
+in one line and points at `pnpm tools:install`. The installer takes the directory
+as an argument (`node scripts/install-tools.mjs --dir <directory>`), never reads a
+version from the network and runs nothing it has not verified: next to each binary
+it writes a receipt (`<tool>.receipt.json`) with the pinned version, the pinned archive hash and the
+SHA-256 of the unpacked binary, and the runner executes a binary only when its hash is the recorded one.
+That guards against a stale or wrong binary; someone who can write `.tools/` can replace both files,
+and CI always installs first. The download is capped at 64 MiB, read as a stream, and times out after two minutes. To move to a newer
+release, change the version and the four hashes of that tool together in
+`scripts/tools.json`, taking each hash from the release's
+`<tool>_<version>_checksums.txt`; `CHINOOK_TOOLS_ONLINE=1 pnpm test:tools`
+downloads every pinned archive and compares it with its pin.
+
+`meaninggraph` reads a strict subset of YAML (see "The YAML subset" in
+[the tool's README](https://github.com/meaninggraph/cli#the-yaml-subset)) and refuses, rather than
+half-reads, what the previous checker's parser accepted. The four everyday cases: an
+anchor or alias (`&`, `*`), a tab after a colon, keep chomping on a block scalar
+(`>+`, `|+`), and an explicit tag such as `!!str`. The current file is inside the subset.
+
+What CI enforces, in `ci.yml` and `deploy.yml` alike (a deploy waits for all of
+it): the build, `pnpm validate` and `pnpm test:data`; `pnpm test:model`; the OVDB
+manifest check; that `model/` is what `pnpm generate` writes; the three commands
+above, with both tools installed from the pins; the data drift guard;
+`pnpm test:worker`; and `pnpm test:tools` (the pins, the installer and the two
+workflows).
 
 `pnpm test:model` checks, and fails CI when:
 
@@ -116,36 +174,21 @@ differs is fetched anew); CI caches the directory keyed by the meaning files. Se
   `min_len`, `enum` or `format` constraint; a constraint the check cannot
   verify is itself an error), compared with `public/data/chinook.json` and
   `src/data/schema.json`;
-- the model is not structurally valid ModelSpec;
-- the meaning file, or the universal concepts at the pinned commit, break the
-  schema, or any reference does not resolve (`modelspec://` to an existing
-  entity and property, concept references to existing concepts, a pin that does
-  not exist, a concept id that is missing at the pin);
-- the meaning is inconsistent: `extends` joins incompatible kinds or forms a
-  cycle (also through a `meaning://` reference to this repository itself),
-  `values-of` or `units-of` names something that is not an entity or changes
-  what the parent concept names (a child may narrow it, never change it), a
-  unit names no currency, a measure is computed from an entity or grouped by
-  something that is not a dimension or attribute, a ratio is summed, or a
-  binding's role does not fit the model: an identifier or display name that is
-  not on the concept's own entity (or not the key, or not a string), a concept
-  with more than one `entity` binding, a foreign key that points at the wrong
-  entity, or one whose target concept has no entity binding (the check then
-  says it cannot check);
 - a country spelling stored in the data matches no country, or more than one;
 - the facts the meaning file states (412 invoices from 2021-01-01 to
   2025-12-22, totals equal their lines, billing country equals the customer's
   country) do not hold;
 - `model/chinook.modelspec.json` or `model/checksums.json` is out of date.
 
-`pnpm lint:modelspec` also validates the HCL with the SpecScore CLI
-(`specscore graph lint`, a pinned release), the ModelSpec validator available
-today. It does not yet check types, constraint keys and values, or that keys
-name properties ([specscore-cli#220](https://github.com/specscore/specscore-cli/issues/220)),
-and cannot export the JSON AST ([specscore-cli#221](https://github.com/specscore/specscore-cli/issues/221)),
-which is why `scripts/lib/modelspec.mjs` validates and serializes the model
-itself. The site publishes every git-tracked file under `model/` (dotfiles
-excluded) unchanged at `/model/`, with a summary page at [/model/](/model/);
+Whether the model is valid ModelSpec, and whether the meaning file is valid (the
+schema, every reference, `extends`, `values-of` and `units-of`, units, measures,
+binding roles), is checked by the released tools above, not by code in this
+repository. `scripts/lib/modelspec.mjs` still parses and serializes the model for
+`pnpm generate`, and checks it as it writes, so that the build never writes the
+twin of an invalid model.
+
+The site publishes every git-tracked file under `model/` (dotfiles excluded)
+unchanged at `/model/`, with a summary page at [/model/](/model/);
 `model/checksums.json` lists each published file's SHA-256 and size.
 
 ## Deployment

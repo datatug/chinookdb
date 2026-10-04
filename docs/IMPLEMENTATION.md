@@ -23,10 +23,15 @@ becoming HTML fallbacks.
 
 ## Meaning checks
 
-`pnpm test:model` checks `model/chinook.meaning.yaml` against the universal
-concepts and the meaning-file schema in `github.com/meaninggraph/core`, read
-from one checkout of the commit that the file's `?ref=` pins (nothing is
-vendored). `scripts/lib/meaning.mjs` fetches it into `.cache/meaning-sources/`
-(retried on network errors, reused once verified) and returns its directory;
-the schema path and the self-check of the universal concepts use that
-directory. CI caches it keyed by the meaning files.
+`pnpm check:meaning` runs the released `meaninggraph` tool twice: on a checkout
+of `github.com/meaninggraph/core` at the commit that the file's `?ref=` pins
+(the universal concepts, checked as a graph in its own right), and on `model/`
+with that checkout supplied by `--graph` and this repository's address passed as
+`--address` (nothing is vendored; the tool refuses a checkout at any other
+commit). The meaning-file schema is the copy embedded in the tool, not the
+checkout's `meaning.schema.json`, and the tool cannot print it, so a pin that
+moves to a changed schema needs the tool pin moved too. `pnpm test:model` reads
+the known values of the universal concepts from the same checkout.
+`scripts/lib/meaning.mjs` fetches it into `.cache/meaning-sources/` (retried on
+network errors, reused once verified) and returns its directory. CI caches it
+keyed by the meaning files.
