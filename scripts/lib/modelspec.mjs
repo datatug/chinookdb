@@ -6,8 +6,9 @@
 // The parser accepts only what ModelSpec v0 HCL allows: named blocks, and
 // attributes whose values are strings, numbers, booleans or lists of those. It
 // rejects expressions, interpolation and map-style containers rather than
-// guessing, so an unsupported construct fails loudly. CI also runs the real
-// HCL parser through `specscore graph lint` (scripts/lint-modelspec.sh).
+// guessing, so an unsupported construct fails loudly. CI validates the model with
+// the released `modelspec` tool (pnpm lint:model, pnpm check:model-twin); this
+// file is what `pnpm generate` writes the JSON twin with, and the data comparison.
 
 export const modelspecVersion = '1.0-draft';
 export const primitiveTypes = ['string', 'int', 'float', 'bool', 'decimal', 'uuid', 'date', 'time', 'datetime', 'document', 'json', 'any'];
