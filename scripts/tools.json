@@ -1,0 +1,26 @@
+{
+  "format": "chinookdb-tools/1",
+  "note": "The released command-line tools that validate the model and the meaning graph, pinned by version and by the SHA-256 of each release archive (the line of the archive in the release's <tool>_<version>_checksums.txt). scripts/install-tools.mjs is the only reader that downloads them; it refuses an archive whose hash differs. To move to a newer release, change the version and every hash together, then run pnpm test:tools.",
+  "tools": {
+    "modelspec": {
+      "version": "0.1.0",
+      "repository": "modelspec-org/cli",
+      "sha256": {
+        "darwin_amd64": "7ff05d3b448bc02d0c56250146992f577ffd6ea2286b478b689b0dabb8617fb3",
+        "darwin_arm64": "27828954715df285a9866f0d68ead80c3735b166d1e125d278046db28fb8feee",
+        "linux_amd64": "19bd1e23d4ebdad552cfa902dc7066dcaa5c2b9cb7bc4c03f8120db683b05be0",
+        "linux_arm64": "7023a8c2d9c113c9d053ab668914c2abef33b42f3803bba283496cb573bd4f24"
+      }
+    },
+    "meaninggraph": {
+      "version": "0.1.0",
+      "repository": "meaninggraph/cli",
+      "sha256": {
+        "darwin_amd64": "8db550e28df38b9ef53faa8e5c66f6ab805fa542a61ff05ec90a4561edb23120",
+        "darwin_arm64": "00e1947d4807285e146e0d3e8c7f7564c50ff4453b76fac8d858f4acf0ad7253",
+        "linux_amd64": "fe48b3a7a1bb7ccfd7ea904917d3a298a19418386ca8dbb84b12c89a597c3d3e",
+        "linux_arm64": "aa985d98f5b49543192ddf1289444e319c2dee26ffc1a3e8e438338b536913a4"
+      }
+    }
+  }
+}
