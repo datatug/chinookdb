@@ -27,7 +27,9 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   const { dir, names } = parseArguments(argv, Object.keys(pins.tools));
   for (const name of names) {
     const done = await installTool(name, { ...options, pins, dir });
-    console.log(`installed ${done.name} ${done.version} (${done.key}, sha256 ${done.sha256}) in ${dir}`);
+    const log = options.log ?? console.log;
+    log(`installed ${done.name} ${done.version} (${done.key}, sha256 ${done.sha256}) in ${dir}`);
+    log(`wrote receipt ${done.receipt} (binary sha256 ${done.binarySha256})`);
   }
   return 0;
 }

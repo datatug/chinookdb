@@ -91,10 +91,11 @@ The universal concepts come from the public repository
 [`meaninggraph/core`](https://github.com/meaninggraph/core), and nothing from it
 is copied into this one. The meaning-file schema (`meaning.schema.json`) is the
 copy embedded in the `meaninggraph` binary, not the one in the checkout (the
-tool does not read the checkout's); the two are byte-identical at the pinned
-commit (the tool's release records the core commit its schema was taken from).
-`meaninggraph` has no command that prints its embedded schema, so nothing here
-compares them: when the pin moves to a commit whose schema changed, move the
+tool does not read the checkout's). `pnpm check:schema` compares them: the bytes of
+`meaninggraph schema` must equal the checkout's `meaning.schema.json`, and
+`meaninggraph schema --source` (the core commit the tool took its schema from) is
+compared with the pin (another commit with the same schema passes, and says so; a
+different schema fails). When the pin moves to a commit whose schema changed, move the
 tool pin too. A concept is referred to as
 `meaning://github.com/meaninggraph/core/<concept>?ref=<commit>`, and every
 reference carries the same full 40-character commit id (the check fails on a
@@ -110,10 +111,11 @@ A meaning file with no reference to `meaninggraph/core` is refused by
 `git fetch` of the pinned id into `.cache/meaning-sources/<commit>`, retried on
 network errors, git-ignored). `pnpm check:meaning` reads the commit from the
 meaning file's own references (nowhere else writes it) and runs `meaninggraph`
-twice: on the checkout itself, as a graph in its own right (every rule applies
-to the universal concepts at the pin), and on `model/` with the checkout supplied
-by `--graph` and this repository's own address (from `ovdb.yaml`) passed as
-`--address`, so a reference from the meaning file to its own repository resolves.
+once on `model/` and on the checkout itself, with the checkout also supplied by
+`--graph` (so it is checked as a graph in its own right, in full, once: every rule
+applies to the universal concepts at the pin) and this repository's own address
+(from `ovdb.yaml`) passed as `--address <address>=model`, so a reference from the
+meaning file to its own repository resolves.
 The tool refuses a checkout at any other commit than the pin;
 `pnpm test:model` reads the known values of the universal concepts (the
 countries) from the same checkout. The resolver in `scripts/lib/meaning.mjs`
@@ -130,13 +132,14 @@ Two released command-line tools validate the model and the meaning graph:
 [`meaninggraph`](https://github.com/meaninggraph/cli). Both are pinned by version
 and by the SHA-256 of each release archive in `scripts/tools.json`
 (linux and macOS, amd64 and arm64; on Windows use WSL). Install them once, then
-run the three checks CI runs:
+run the checks CI runs:
 
 ```sh
 pnpm tools:install      # downloads the pinned archives into .tools/bin and checks each SHA-256 before unpacking
 pnpm lint:model         # modelspec lint --profile publish model
 pnpm check:model-twin   # modelspec export --check: model/chinook.modelspec.json is what the HCL exports to
-pnpm check:meaning      # meaninggraph check <core checkout>, then meaninggraph check model --graph github.com/meaninggraph/core=<same checkout>
+pnpm check:meaning      # meaninggraph check model <core> --address github.com/datatug/chinookdb=model --graph github.com/meaninggraph/core=<core>
+pnpm check:schema       # meaninggraph schema (and --source) against <core>/meaning.schema.json, <core> = the checkout at the pinned commit
 ```
 
 Each command exits 0 when clean, 1 on findings and 2 when it could not run; when
@@ -147,7 +150,9 @@ version from the network and runs nothing it has not verified: next to each bina
 it writes a receipt (`<tool>.receipt.json`) with the pinned version, the pinned archive hash and the
 SHA-256 of the unpacked binary, and the runner executes a binary only when its hash is the recorded one.
 That guards against a stale or wrong binary; someone who can write `.tools/` can replace both files,
-and CI always installs first. The download is capped at 64 MiB, read as a stream, and times out after two minutes. To move to a newer
+and CI always installs first. A binary swapped in between the hash check and the start of the
+process would still run; that takes the same actor. The installer prints a line when it writes the receipt, sweeps staging files
+of earlier runs that are older than five minutes, and the download is capped at 64 MiB, read as a stream, and times out after two minutes. To move to a newer
 release, change the version and the four hashes of that tool together in
 `scripts/tools.json`, taking each hash from the release's
 `<tool>_<version>_checksums.txt`; `CHINOOK_TOOLS_ONLINE=1 pnpm test:tools`
@@ -161,7 +166,7 @@ anchor or alias (`&`, `*`), a tab after a colon, keep chomping on a block scalar
 
 What CI enforces, in `ci.yml` and `deploy.yml` alike (a deploy waits for all of
 it): the build, `pnpm validate` and `pnpm test:data`; `pnpm test:model`; the OVDB
-manifest check; that `model/` is what `pnpm generate` writes; the three commands
+manifest check; that `model/` is what `pnpm generate` writes; the commands
 above, with both tools installed from the pins; the data drift guard;
 `pnpm test:worker`; and `pnpm test:tools` (the pins, the installer and the two
 workflows).
@@ -422,7 +427,9 @@ and the Directory accept:
   the MeaningGraph registry's record of the graph (which is for this repository
   in whatever case the registry spells it, and `publisher.repository` may be in any
   case), so offline the checker only requires it to name this repository, in any
-  case; its exact spelling is the registry's, and the Directory checks it;
+  case; its exact spelling is the registry's, and the Directory checks it. `pnpm check:meaning`
+  passes the address from `ovdb.yaml` to `meaninggraph`, which compares addresses exactly, so a
+  spelling that differs in case from the meaning file's own self-references fails there, loudly;
 - a module name is a letter followed by letters, digits and `_`, with upper case
   allowed and case-sensitive (`Sales` and `sales` are two modules), never with a
   dot, because `<address>.<Entity>` is an entity reference (the Directory's

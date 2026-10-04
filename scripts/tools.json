@@ -3,23 +3,23 @@
   "note": "The released command-line tools that validate the model and the meaning graph, pinned by version and by the SHA-256 of each release archive (the line of the archive in the release's <tool>_<version>_checksums.txt). scripts/install-tools.mjs is the only reader that downloads them; it refuses an archive whose hash differs. To move to a newer release, change the version and every hash together, then run pnpm test:tools.",
   "tools": {
     "modelspec": {
-      "version": "0.1.0",
+      "version": "0.1.1",
       "repository": "modelspec-org/cli",
       "sha256": {
-        "darwin_amd64": "7ff05d3b448bc02d0c56250146992f577ffd6ea2286b478b689b0dabb8617fb3",
-        "darwin_arm64": "27828954715df285a9866f0d68ead80c3735b166d1e125d278046db28fb8feee",
-        "linux_amd64": "19bd1e23d4ebdad552cfa902dc7066dcaa5c2b9cb7bc4c03f8120db683b05be0",
-        "linux_arm64": "7023a8c2d9c113c9d053ab668914c2abef33b42f3803bba283496cb573bd4f24"
+        "darwin_amd64": "0278f91d6e8599a31369e72e8bfae697e1d56ba018df47e26709039ddde434e6",
+        "darwin_arm64": "1bd17601bc4655072db62e4137960fdd0380b95192db9201ba7a231c95d8eb29",
+        "linux_amd64": "a8af1cd0784759f284a5799e6de3261b1e81677ac47a6b5a895d2734d1e2613d",
+        "linux_arm64": "a92db84e23902044390fcf9036c56b153ee893cd60c3d05b1222edd6ce1f7b3c"
       }
     },
     "meaninggraph": {
-      "version": "0.1.0",
+      "version": "0.2.0",
       "repository": "meaninggraph/cli",
       "sha256": {
-        "darwin_amd64": "8db550e28df38b9ef53faa8e5c66f6ab805fa542a61ff05ec90a4561edb23120",
-        "darwin_arm64": "00e1947d4807285e146e0d3e8c7f7564c50ff4453b76fac8d858f4acf0ad7253",
-        "linux_amd64": "fe48b3a7a1bb7ccfd7ea904917d3a298a19418386ca8dbb84b12c89a597c3d3e",
-        "linux_arm64": "aa985d98f5b49543192ddf1289444e319c2dee26ffc1a3e8e438338b536913a4"
+        "darwin_amd64": "15cbdcc04df5316eb9df12ad9b512db828bac5ae9bb62e8c75ab43b185db8ae7",
+        "darwin_arm64": "635b1560c62be0fc68ab581513ac9a6963af2857f3eaad3d7c0ea5de04998ecf",
+        "linux_amd64": "582c109132d26db1b940e6af757185c821e318ba7aa0ad073e30daa788e15767",
+        "linux_arm64": "ad64e471b9de23523b6fe896f9d3dc6abccc06b2d73009c76818aa542e75872b"
       }
     }
   }

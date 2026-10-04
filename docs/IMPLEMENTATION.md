@@ -23,14 +23,16 @@ becoming HTML fallbacks.
 
 ## Meaning checks
 
-`pnpm check:meaning` runs the released `meaninggraph` tool twice: on a checkout
-of `github.com/meaninggraph/core` at the commit that the file's `?ref=` pins
-(the universal concepts, checked as a graph in its own right), and on `model/`
-with that checkout supplied by `--graph` and this repository's address passed as
-`--address` (nothing is vendored; the tool refuses a checkout at any other
-commit). The meaning-file schema is the copy embedded in the tool, not the
-checkout's `meaning.schema.json`, and the tool cannot print it, so a pin that
-moves to a changed schema needs the tool pin moved too. `pnpm test:model` reads
+`pnpm check:meaning` runs the released `meaninggraph` tool once, on `model/` and
+on a checkout of `github.com/meaninggraph/core` at the commit that the file's
+`?ref=` pins, with the checkout also supplied by `--graph` (so the universal
+concepts are checked as a graph in their own right, in full) and this
+repository's address passed as `--address` (nothing is vendored; the tool refuses
+a checkout at any other commit). The meaning-file schema is the copy embedded in
+the tool, not the checkout's `meaning.schema.json`; `pnpm check:schema` compares
+the two byte for byte (`meaninggraph schema`) and the tool's recorded core
+commit with the pin (`schema --source`), so a pin that moves to a changed schema
+fails until the tool pin moves too. `pnpm test:model` reads
 the known values of the universal concepts from the same checkout.
 `scripts/lib/meaning.mjs` fetches it into `.cache/meaning-sources/` (retried on
 network errors, reused once verified) and returns its directory. CI caches it
