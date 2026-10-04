@@ -1,14 +1,19 @@
 // The released command-line tools that validate the model and the meaning graph, pinned in scripts/tools.json
 // by version and by the SHA-256 of each release archive: the installer that downloads and verifies them
-// (scripts/install-tools.mjs) and the runner that refuses a missing or another-version binary
+// (scripts/install-tools.mjs) and the runner that refuses a binary the installer did not install
 // (scripts/run-tool.mjs, scripts/check-meaning.mjs).
 //
-// Nothing here reads a version from the network, follows `latest` or runs anything that was not verified:
-// an archive is hashed before a byte of it is unpacked, and a binary is run only after the installer put it
-// in the directory the caller named.
+// What is guaranteed: nothing here reads a version from the network or follows `latest`; an archive is hashed
+// before a byte of it is unpacked; the installer records the SHA-256 of the binary it unpacked in a receipt beside
+// it (<name>.receipt.json, with the version and the pinned archive hash); and the runner executes a binary only
+// when its hash is the one in a receipt that names the pinned version and archive, so another file in the
+// directory, or a binary of an earlier pin, is refused with a pointer to the installer.
+// What is not: the receipt sits next to the binary, so a local user who can write the directory can replace both.
+// That is a guard against a stale or wrong binary, not against someone with write access to .tools/. CI always
+// runs the installer first in the same job, which replaces both files.
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -54,29 +59,59 @@ export const sha256Hex = (bytes) => createHash('sha256').update(bytes).digest('h
 // Where the binaries live unless the caller names another directory: git-ignored, under the repository.
 export const defaultBinDir = (env = process.env) => env.TOOLS_BIN || join(root, '.tools', 'bin');
 
-const maxArchiveBytes = 64 * 1024 * 1024;
+export const maxArchiveBytes = 64 * 1024 * 1024;
+export const downloadTimeoutMs = 120_000;
 const pause = (ms) => new Promise((done) => setTimeout(done, ms));
 
-/** Downloads `url` into memory over HTTPS, retrying a network error or a 5xx; a 4xx is final. */
-export async function download(url, { fetchImpl = fetch, attempts = 3, sleep = pause } = {}) {
+/**
+ * Downloads `url` into memory over HTTPS, retrying a network error or a 5xx; a 4xx is final. The body is read as a
+ * stream and the download stops at `maxBytes` (a larger Content-Length is refused before the body is read), and one
+ * deadline of `timeoutMs` covers every attempt, enforced with an abort signal.
+ */
+export async function download(url, { fetchImpl = fetch, attempts = 3, sleep = pause, maxBytes = maxArchiveBytes, timeoutMs = downloadTimeoutMs } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const tooLarge = () => new ToolsError(`${url} is larger than ${maxBytes} bytes`);
   let last;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      const response = await fetchImpl(url, { redirect: 'follow' });
-      if (response.ok) {
-        const bytes = Buffer.from(await response.arrayBuffer());
-        if (bytes.length > maxArchiveBytes) throw new ToolsError(`${url} is larger than ${maxArchiveBytes} bytes`);
-        return bytes;
+  try {
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const response = await fetchImpl(url, { redirect: 'follow', signal: controller.signal });
+        if (response.ok) {
+          const length = Number(response.headers?.get('content-length'));
+          if (Number.isFinite(length) && length > maxBytes) throw tooLarge();
+          const chunks = [];
+          let total = 0;
+          const reader = response.body?.getReader();
+          if (reader) {
+            for (let part = await reader.read(); !part.done; part = await reader.read()) {
+              total += part.value.length;
+              if (total > maxBytes) {
+                await reader.cancel().catch(() => {});
+                throw tooLarge();
+              }
+              chunks.push(part.value);
+            }
+            return Buffer.concat(chunks);
+          }
+          const bytes = Buffer.from(await response.arrayBuffer());
+          if (bytes.length > maxBytes) throw tooLarge();
+          return bytes;
+        }
+        last = new Error(`HTTP ${response.status}`);
+        if (response.status < 500) break;
+      } catch (error) {
+        if (error instanceof ToolsError) throw error;
+        last = error;
       }
-      last = new Error(`HTTP ${response.status}`);
-      if (response.status < 500) break;
-    } catch (error) {
-      if (error instanceof ToolsError) throw error;
-      last = error;
+      if (controller.signal.aborted) break;
+      if (attempt < attempts) await sleep(attempt * 2000);
     }
-    if (attempt < attempts) await sleep(attempt * 2000);
+    if (controller.signal.aborted) throw new Error(`timed out after ${timeoutMs / 1000} seconds`);
+    throw last;
+  } finally {
+    clearTimeout(timer);
   }
-  throw last;
 }
 
 /** Unpacks the one named member of a .tar.gz into `into`. */
@@ -114,31 +149,66 @@ export async function installTool(name, { pins, dir, platform = process.platform
     extract(join(work, archive), name, work);
     const unpacked = join(work, name);
     if (!lstatSync(unpacked, { throwIfNoEntry: false })?.isFile()) throw new ToolsError(`${archive} holds no regular file ${name}`);
-    mkdirSync(dir, { recursive: true });
+    const binary = readFileSync(unpacked);
+    const receipt = { tool: name, version: pin.version, platform: key, archiveSha256: actual, binarySha256: sha256Hex(binary) };
+    try {
+      mkdirSync(dir, { recursive: true });
+      unlinkSync(receiptPath(dir, name)); // a receipt never outlives the binary it describes
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw new ToolsError(`cannot install ${name} into ${dir}: ${error.message.split('\n')[0]}`);
+    }
     const target = join(dir, name);
-    const staged = `${target}.new-${process.pid}`;
-    copyFileSync(unpacked, staged);
-    chmodSync(staged, 0o755);
-    renameSync(staged, target);
-    return { name, version: pin.version, key, archive, sha256: actual, path: target };
+    placeFile(target, binary, 0o755);
+    placeFile(receiptPath(dir, name), `${JSON.stringify(receipt, null, 2)}\n`, 0o644);
+    return { name, version: pin.version, key, archive, sha256: actual, binarySha256: receipt.binarySha256, path: target };
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
 }
 
+const receiptPath = (dir, name) => join(dir, `${name}.receipt.json`);
+
 /**
- * The path of an installed tool whose `version` is the pinned one. A missing binary, one that cannot run and
- * one of another version each end in a one-line pointer to the installer (exit 2).
+ * Writes `content` to `target` through a staging file made exclusively (O_EXCL: it fails when the name exists and
+ * never follows a symbolic link there), then renames it into place. Any failure removes the staging file this call
+ * made and ends as a one-line ToolsError.
  */
-export function locateTool(name, { pins, binDir = defaultBinDir(), run = spawnSync } = {}) {
+function placeFile(target, content, mode) {
+  const staged = `${target}.new-${process.pid}`;
+  let created = false;
+  try {
+    writeFileSync(staged, content, { flag: 'wx', mode });
+    created = true;
+    chmodSync(staged, mode);
+    renameSync(staged, target);
+  } catch (error) {
+    if (created) rmSync(staged, { force: true });
+    throw new ToolsError(`cannot install ${target}: ${error.message.split('\n')[0]}`);
+  }
+}
+
+/**
+ * The path of an installed tool that is the pinned release: its receipt names the pinned version and the pinned
+ * archive hash of this platform, and the binary's SHA-256 is the one the receipt recorded. A missing binary or
+ * receipt, a binary that was replaced and a receipt of another pin each end in a one-line pointer to the
+ * installer (exit 2). The binary is hashed, not run.
+ */
+export function locateTool(name, { pins, binDir = defaultBinDir(), platform = process.platform, arch = process.arch } = {}) {
   const pin = pins.tools[name];
   if (!pin) throw new ToolsError(`unknown tool ${name}; pinned: ${Object.keys(pins.tools).join(', ')}`, 2);
   const path = join(binDir, name);
   if (!existsSync(path)) throw new ToolsError(`${name} is not installed in ${binDir}; run: ${installCommand}`, 2);
-  const result = run(path, ['version'], { encoding: 'utf8' });
-  if (result.error || result.status !== 0) throw new ToolsError(`${path} does not run (${result.error?.message ?? `exit ${result.status}`}); run: ${installCommand}`, 2);
-  const line = String(result.stdout).split('\n')[0].trim();
-  if (line !== `${name} ${pin.version}` && !line.startsWith(`${name} ${pin.version} `)) throw new ToolsError(`${path} is "${line}", the pinned release is ${name} ${pin.version}; run: ${installCommand}`, 2);
+  const stale = (why) => new ToolsError(`${path} is not the pinned ${name} ${pin.version} (${why}); run: ${installCommand}`, 2);
+  let receipt;
+  try {
+    receipt = JSON.parse(readFileSync(receiptPath(binDir, name), 'utf8'));
+  } catch {
+    throw stale('no readable receipt from the installer');
+  }
+  const key = platformKey(platform, arch);
+  if (!key) throw new ToolsError(`no pinned ${name} build for ${platform}/${arch}; pinned platforms: ${platforms.join(', ')}`, 2);
+  if (receipt.tool !== name || receipt.version !== pin.version || receipt.platform !== key || receipt.archiveSha256 !== pin.sha256[key]) throw stale('its receipt is of another release or platform');
+  if (!sha256Pattern.test(receipt.binarySha256 ?? '') || sha256Hex(readFileSync(path)) !== receipt.binarySha256) throw stale('the file is not the one the installer installed');
   return path;
 }
 
@@ -146,8 +216,8 @@ export function locateTool(name, { pins, binDir = defaultBinDir(), run = spawnSy
  * Runs a pinned, installed tool with the terminal as its output and returns its exit code (0 clean, 1 findings, 2 usage).
  * `args` may be a function, called once the binary is found, for arguments that cost something to prepare.
  */
-export function runTool(name, args, { pins = loadPins(), binDir = defaultBinDir(), run = spawnSync, cwd = root } = {}) {
-  const path = locateTool(name, { pins, binDir, run });
+export function runTool(name, args, { pins = loadPins(), binDir = defaultBinDir(), run = spawnSync, cwd = root, platform, arch } = {}) {
+  const path = locateTool(name, { pins, binDir, platform, arch });
   const result = run(path, typeof args === 'function' ? args() : args, { stdio: 'inherit', cwd });
   if (result.error) throw new ToolsError(`cannot run ${path}: ${result.error.message}`, 2);
   return result.status ?? 2;
