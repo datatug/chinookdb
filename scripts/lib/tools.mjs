@@ -35,13 +35,16 @@ export class ToolsError extends Error {
 }
 
 const sha256Pattern = /^[0-9a-f]{64}$/;
+// A tool name becomes a file name (the binary, its receipt, its archive): a plain identifier, never a path.
+export const toolNamePattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 
 /** Reads and checks scripts/tools.json: every tool has a release version, a repository and a SHA-256 for every platform. */
 export function loadPins(path = pinsPath) {
   const pins = JSON.parse(readFileSync(path, 'utf8'));
   if (pins.format !== 'chinookdb-tools/1' || !pins.tools || typeof pins.tools !== 'object') throw new ToolsError(`${path} is not a chinookdb-tools/1 file`, 2);
   for (const [name, pin] of Object.entries(pins.tools)) {
-    if (!/^\d+\.\d+\.\d+$/.test(pin.version ?? '')) throw new ToolsError(`${name}: version must be a release number such as 0.1.0, not ${JSON.stringify(pin.version)} (no latest, no range)`, 2);
+    if (!toolNamePattern.test(name)) throw new ToolsError(`tool name ${JSON.stringify(name)} is not a plain name (lower-case letters and digits, hyphens inside): it names a file in the install directory`, 2);
+    if (!/^\d+\.\d+\.\d+$/.test(pin.version ?? '')) throw new ToolsError(`${name}: version must be a release number such as 0.1.0, not ${JSON.stringify(pin.version)} (a pinned release, never a moving name or a range)`, 2);
     if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(pin.repository ?? '')) throw new ToolsError(`${name}: repository must be owner/name`, 2);
     for (const platform of platforms) if (!sha256Pattern.test(pin.sha256?.[platform] ?? '')) throw new ToolsError(`${name}: no SHA-256 pinned for ${platform}`, 2);
   }
@@ -200,6 +203,8 @@ function placeFile(target, content, mode) {
       // A leftover of an earlier run (or of one with this pid) must not block the install: remove it (a link is
       // removed, not followed) and create the file again, still exclusively.
       if (error.code !== 'EEXIST') throw error;
+      // The installer never makes a directory here, so it does not remove one either: refuse, and say what to do.
+      if (lstatSync(staged, { throwIfNoEntry: false })?.isDirectory()) throw new ToolsError(`cannot install ${target}: ${staged} is a directory, which the installer did not make and will not remove; remove it by hand`, 2);
       rmSync(staged, { force: true });
       writeFileSync(staged, content, { flag: 'wx', mode });
     }
@@ -208,6 +213,7 @@ function placeFile(target, content, mode) {
     renameSync(staged, target);
   } catch (error) {
     if (created) rmSync(staged, { force: true });
+    if (error instanceof ToolsError) throw error;
     throw new ToolsError(`cannot install ${target}: ${error.message.split('\n')[0]}`);
   }
 }

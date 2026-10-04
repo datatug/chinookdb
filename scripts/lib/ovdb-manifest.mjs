@@ -470,12 +470,12 @@ function analyseManifest(path, files, { repository } = {}) {
         }
       }
     }
-    // The Directory compares meaning.graph.address with the MeaningGraph registry's record of the graph verbatim, and
-    // meaninggraph compares addresses exactly (the address check:meaning passes is this one): offline, the repository
-    // must be this one and the address is written in lower case, whatever case publisher.repository is in.
+    // The Directory compares meaning.graph.address with the MeaningGraph registry's record of the graph verbatim, and that
+    // record is for this repository in whatever case the registry spells it: offline, the repository must be this one,
+    // in any case; the exact spelling is the registry's, and the Directory checks it.
     if (isText(graph?.address) && repoParts) {
-      const expected = `meaning://github.com/${repoParts.owner}/${repoParts.repo}`.toLowerCase();
-      if (graph.address !== expected) bad(`meaning.graph.address must be ${expected} (lower case, as meaninggraph compares addresses exactly), derived from publisher.repository`);
+      const expected = `meaning://github.com/${repoParts.owner}/${repoParts.repo}`;
+      if (graph.address.toLowerCase() !== expected.toLowerCase()) bad(`meaning.graph.address must be ${expected} (in any case), derived from publisher.repository`);
     }
   } else {
     // ---- shared model: the model and the meaning graph are published in other repositories ----

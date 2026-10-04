@@ -65,11 +65,23 @@ test('loadPins refuses latest, a range, a short hash and a missing platform', ()
     writeFileSync(path, JSON.stringify(doc));
     return () => loadPins(path);
   };
-  assert.throws(broken((tool) => { tool.version = 'latest'; }), /no latest, no range/);
-  assert.throws(broken((tool) => { tool.version = '^0.1.0'; }), /no latest, no range/);
+  assert.throws(broken((tool) => { tool.version = 'latest'; }), /a pinned release, never a moving name or a range/);
+  assert.throws(broken((tool) => { tool.version = '^0.1.0'; }), /a pinned release, never a moving name or a range/);
   assert.throws(broken((tool) => { tool.sha256.linux_amd64 = 'abc'; }), /no SHA-256 pinned for linux_amd64/);
   assert.throws(broken((tool) => { delete tool.sha256.darwin_arm64; }), /no SHA-256 pinned for darwin_arm64/);
   assert.throws(broken((tool) => { tool.repository = 'https://example.com/x'; }), /repository must be owner\/name/);
+  for (const name of ['../escape', 'a/b', '.hidden', 'Mod', '', 'x y', 'a..b', '-x', 'x-', '1x', 'a\\b']) {
+    const doc = structuredClone(pins);
+    doc.tools[name] = doc.tools.modelspec;
+    const path = fresh('pins') + '.json';
+    writeFileSync(path, JSON.stringify(doc));
+    assert.throws(() => loadPins(path), (error) => error.exit === 2 && /is not a plain name/.test(error.message) && !error.message.includes('\n'), JSON.stringify(name));
+  }
+  const plain = structuredClone(pins);
+  plain.tools['my-tool2'] = plain.tools.modelspec;
+  const plainPath = fresh('pins') + '.json';
+  writeFileSync(plainPath, JSON.stringify(plain));
+  assert.ok(loadPins(plainPath).tools['my-tool2'], 'a plain name with a hyphen and a digit is fine');
   const other = fresh('pins') + '.json';
   writeFileSync(other, '{"tools":{}}');
   assert.throws(() => loadPins(other), /not a chinookdb-tools\/1 file/);
@@ -100,6 +112,55 @@ test('installTool accepts the archive with the pinned hash, unpacks only the bin
   assert.deepEqual(readdirSync(dir).sort(), ['widget', 'widget.receipt.json'], 'only the binary and its receipt: no archive, no README, no staging file');
   assert.deepEqual(JSON.parse(readFileSync(join(dir, 'widget.receipt.json'), 'utf8')), { tool: 'widget', version: '1.2.3', platform: 'linux_amd64', archiveSha256: sha256Hex(bytes), binarySha256: sha256Hex('#!/bin/sh\necho fake\n') });
   assert.equal(spawnSync(done.path, { encoding: 'utf8' }).stdout, 'fake\n');
+});
+
+test('installTool refuses a wrong hash before it unpacks anything or writes to the directory', async () => {
+  const bytes = archiveOf('widget');
+  const tampered = archiveOf('widget', '#!/bin/sh\necho evil\n');
+  const dir = fresh('bin');
+  await assert.rejects(
+    installTool('widget', { pins: pinFor('widget', bytes), dir, platform: 'linux', arch: 'x64', download: async () => tampered, extract: never('extract') }),
+    (error) => {
+      assert.ok(error instanceof ToolsError);
+      assert.equal(error.exit, 1);
+      assert.ok(error.message.includes(sha256Hex(tampered)) && error.message.includes(sha256Hex(bytes)), 'the message names both hashes');
+      assert.match(error.message, /nothing was unpacked or installed/);
+      return true;
+    },
+  );
+  assert.ok(!existsSync(dir), 'the directory was not even created');
+  // The same archive for the platform whose pinned hash is something else is refused too.
+  await assert.rejects(installTool('widget', { pins: pinFor('widget', bytes), dir, platform: 'darwin', arch: 'arm64', download: async () => bytes, extract: never('extract') }), /pins f{64}/);
+});
+
+test('installTool refuses a platform with no pinned build, before it downloads', async () => {
+  const bytes = archiveOf('widget');
+  for (const [platform, arch] of [['win32', 'x64'], ['linux', 'ia32']]) {
+    await assert.rejects(
+      installTool('widget', { pins: pinFor('widget', bytes), dir: fresh('bin'), platform, arch, download: never('download'), extract: never('extract') }),
+      (error) => error instanceof ToolsError && error.exit === 2 && error.message.includes(`no pinned widget build for ${platform}/${arch}`) && error.message.includes('linux_amd64'),
+    );
+  }
+  await assert.rejects(installTool('nope', { pins: pinFor('widget', bytes), dir: fresh('bin'), download: never('download') }), /unknown tool nope; pinned: widget/);
+});
+
+test('installTool turns a failed download into a clear refusal and installs nothing', async () => {
+  const dir = fresh('bin');
+  await assert.rejects(
+    installTool('widget', { pins: pinFor('widget', archiveOf('widget')), dir, platform: 'linux', arch: 'x64', download: async () => { throw new Error('HTTP 404'); }, extract: never('extract') }),
+    (error) => error instanceof ToolsError && error.exit === 1 && /cannot download https:\/\/github\.com\/acme\/cli\/releases\/download\/v1\.2\.3\/widget_1\.2\.3_linux_amd64\.tar\.gz: HTTP 404/.test(error.message),
+  );
+  assert.ok(!existsSync(dir));
+});
+
+test('installTool refuses a verified archive that does not hold the binary as a regular file', async () => {
+  const bytes = archiveOf('other');
+  const dir = fresh('bin');
+  await assert.rejects(installTool('widget', { pins: pinFor('widget', bytes), dir, platform: 'linux', arch: 'x64', download: async () => bytes }), /cannot unpack widget/);
+  assert.ok(!existsSync(dir));
+  const link = archiveOf('widget');
+  await assert.rejects(installTool('widget', { pins: pinFor('widget', link), dir, platform: 'linux', arch: 'x64', download: async () => link, extract: (_archive, name, into) => symlinkSync('/bin/sh', join(into, name)) }), /holds no regular file widget/);
+  assert.ok(!existsSync(dir), 'a link is never installed');
 });
 
 test('the hash is compared whole: a pin that differs in its last digit, or only the first 16 digits match, is refused', async () => {
@@ -147,6 +208,16 @@ test('the staging file is made exclusively and never followed, a leftover never 
   const file = fresh('file');
   writeFileSync(file, 'x');
   await assert.rejects(install(join(file, 'bin')), (error) => error instanceof ToolsError && /^cannot install widget into /.test(error.message) && !error.message.includes('\n'));
+});
+
+test('a directory at the staging name is refused, as one line with exit 2 that says to remove it by hand, and is not removed', async () => {
+  const bytes = archiveOf('widget');
+  const dir = fresh('bin');
+  mkdirSync(join(dir, `widget.new-${process.pid}`), { recursive: true });
+  writeFileSync(join(dir, `widget.new-${process.pid}`, 'keep'), 'x');
+  await assert.rejects(installTool('widget', { pins: pinFor('widget', bytes), dir, platform: 'linux', arch: 'x64', download: async () => bytes }), (error) => error instanceof ToolsError && error.exit === 2 && /is a directory, which the installer did not make and will not remove; remove it by hand$/.test(error.message) && !error.message.includes('\n'));
+  assert.equal(readFileSync(join(dir, `widget.new-${process.pid}`, 'keep'), 'utf8'), 'x', 'the directory is left as it was');
+  assert.ok(!existsSync(join(dir, 'widget')), 'and nothing was installed');
 });
 
 test('stale staging leftovers are swept at install time; a young one, other names and a directory are not', async () => {
@@ -267,24 +338,68 @@ test('the installer command line needs a directory, names no unknown tool, and i
   assert.equal(lines[1], `wrote receipt ${join(dir, 'widget.receipt.json')} (binary sha256 ${sha256Hex('#!/bin/sh\necho fake\n')})`, 'one line says the receipt was written');
 });
 
-/** What the tool scripts must never contain, in code (comment lines are not looked at). */
-const scriptProblems = (text) => {
-  const code = text.replace(/^\s*\/\/.*$/gm, '');
-  const forbidden = [
-    [/releases\/latest|api\.github\.com|self-update|curl|wget|\| *(ba)?sh\b|shell: *true/, 'a download by hand, an update, a pipe to a shell'],
-    [/(?<![.\w])exec\(|\b(child_process|childProcess|cp)\.exec(Sync)?\(/, 'child_process.exec, which runs a shell'],
-    [/import\s*\{[^}]*\bexec(Sync)?\b[^}]*\}\s*from\s*['"](node:)?child_process['"]/, 'an import of exec or execSync'],
-    [/execSync\(\s*['"`][^'"`\n]*(&&|\|)/, 'execSync with a shell string that chains or pipes'],
-    [/['"`]latest['"`]/, '"latest" as a version'],
-  ];
-  return forbidden.filter(([pattern]) => pattern.test(code)).map(([, what]) => what);
+/**
+ * What the tool scripts may contain, as an allow-list (comment lines are not looked at). `node:child_process` is imported
+ * statically and only as the named functions in `allowed`; it is not reached any other way (no dynamic import, no require,
+ * no createRequire); nothing is called `shell`; no shell is named as a command; and the version is never built in code
+ * (it comes from scripts/tools.json: no `latest`, no string put together from pieces). Returns what was found.
+ */
+const scriptProblems = (text, allowed = []) => {
+  let code = text.replace(/^\s*\/\/.*$/gm, '');
+  const problems = [];
+  const childProcess = /['"](?:node:)?child_process['"]/;
+  for (const statement of code.match(/import\s[^;]*?['"](?:node:)?child_process['"]/g) ?? []) {
+    const named = /^import\s*\{([^}]*)\}\s*from\s*['"](?:node:)?child_process['"]$/.exec(statement.trim());
+    const names = named ? named[1].split(',').map((name) => name.trim()).filter(Boolean) : null;
+    if (!names) problems.push('child_process imported other than as a list of named functions');
+    else for (const name of names) if (!allowed.includes(name)) problems.push(`child_process function ${name} is not on the allow-list`);
+    code = code.replace(statement, '');
+  }
+  if (childProcess.test(code) || /\bchild_process\b/.test(code)) problems.push('child_process reached other than by a static import');
+  if (/\bimport\s*\(|\brequire\s*\(|\bcreateRequire\b|process\.binding/.test(code)) problems.push('a dynamic import, require or createRequire');
+  if (/(?<![.\w])exec(Sync)?\(/.test(code)) problems.push('a call of exec or execSync, which run a shell');
+  if (/\bshell\b/.test(code)) problems.push('a property or name called shell');
+  if (/['"`](?:\/(?:usr\/)?bin\/)?(?:sh|bash|zsh|dash|ksh|cmd|cmd\.exe|powershell|pwsh)['"`]/.test(code)) problems.push('a shell named as a command');
+  if (/\blatest\b/i.test(code)) problems.push('latest');
+  if (/['"`]\s*\+\s*['"`]|['"`]\s*\)?\.concat\(|\$\{\s*['"`]/.test(code)) problems.push('a string put together from pieces, where a version could be');
+  if (/releases\/latest|api\.github\.com|self-update|\bcurl\b|\bwget\b/.test(code)) problems.push('a download by hand or an update');
+  return problems;
 };
 
-test('the installer and the runner never ask for latest, a version from the network, a shell or a shell pipe', () => {
-  for (const file of ['scripts/install-tools.mjs', 'scripts/run-tool.mjs', 'scripts/check-meaning.mjs', 'scripts/check-schema.mjs', 'scripts/lib/tools.mjs']) assert.deepEqual(scriptProblems(read(file)), [], file);
-  // The lint itself: it catches each of these, and not a regular expression's .exec( or a call that takes no shell.
-  for (const bad of ["child_process.exec('x')", "cp.exec('x')", "import { exec } from 'node:child_process';", "import { spawnSync, execSync } from \"child_process\";", "exec('x')", "execSync('tar xzf x && ./x')", 'execSync(`a | b`)', "const version = 'latest';", 'version: "latest"', 'shell: true', 'curl -fsSL x | sh', 'fetch(`https://github.com/a/b/releases/latest`)']) assert.notDeepEqual(scriptProblems(bad), [], bad);
-  for (const fine of ['/a/.exec(text)', 'const m = pattern.exec(line);', "spawnSync('tar', ['-xzf', a]);", "execFileSync('git', ['x']);", "// exec('x') in a comment", "const message = 'no latest, no range';", "const note = 'pinned';"]) assert.deepEqual(scriptProblems(fine), [], fine);
+test('the tool scripts use child_process only as the functions they need, never reach a shell, and never build a version', () => {
+  const allowed = { 'scripts/lib/tools.mjs': ['spawnSync'], 'scripts/install-tools.mjs': [], 'scripts/run-tool.mjs': [], 'scripts/check-meaning.mjs': [], 'scripts/check-schema.mjs': [] };
+  for (const [file, names] of Object.entries(allowed)) assert.deepEqual(scriptProblems(read(file), names), [], file);
+  assert.deepEqual(scriptProblems("import { spawnSync } from 'node:child_process';", ['spawnSync']), [], 'the allow-list lets the one function through');
+  const bad = [
+    "import * as proc from 'node:child_process'; proc.exec('x')",
+    "const { exec: go } = await import('node:child_process'); go('x')",
+    "createRequire(import.meta.url)('node:child_process')",
+    "spawnSync('sh', ['-c', 'tar xzf x && ./x'])",
+    "spawnSync(path, args, { shell: '/bin/sh' })",
+    'spawnSync(path, args, { shell: !0 })',
+    'spawnSync(path, args, { shell })',
+    "const version = 'lat' + 'est';",
+    "import { exec } from 'node:child_process';",
+    "import { spawnSync, execSync } from \"child_process\";",
+    "import { spawnSync as run } from 'node:child_process';",
+    "import cp from 'node:child_process';",
+    "import 'node:child_process';",
+    "const cp = require('child_process');",
+    "child_process.exec('x')",
+    "execSync('tar xzf x && ./x')",
+    'execSync(`a | b`)',
+    "import cp from 'node:child_process'; cp.exec('x')",
+    "exec('x')",
+    'const version = "latest";',
+    'spawnSync(path, args, { shell: true })',
+    "const version = 'latest';",
+    'curl -fsSL x | sh',
+    'fetch(`https://github.com/a/b/releases/latest`)',
+    "const v = `lat${'est'}`;",
+    "spawnSync('/bin/bash', ['-c', 'x'])",
+  ];
+  for (const sample of bad) assert.notDeepEqual(scriptProblems(sample, ['spawnSync']), [], sample);
+  for (const fine of ['/a/.exec(text)', 'const m = pattern.exec(line);', "spawnSync('tar', ['-xzf', a]);", "execFileSync('git', ['x']);", "// exec('x') in a comment", "const note = 'pinned';", "const message = 'no range, no tag';"]) assert.deepEqual(scriptProblems(fine, ['spawnSync']), [], fine);
 });
 
 // Downloads every pinned archive and compares its SHA-256 with the pin: how the hashes are confirmed.
