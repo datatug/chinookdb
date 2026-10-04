@@ -1102,7 +1102,7 @@ test('the publisher, the graph and the licences are stated and agree with the re
   assert.match(withManifest((m) => { m.publisher.repository = 'https://github.com/datatug/other'; }), /publisher.repository must be https:\/\/github.com\/datatug\/chinookdb, the repository this manifest is in/);
   assert.match(withManifest((m) => { m.publisher.url = 'https://example.com/datatug'; }), /publisher.url must be https:\/\/github.com\/<owner>/);
   assert.match(withManifest((m) => { m.meaning.graph.id = 'not-chinook'; }), /meaning.graph.id is not-chinook but the meaning file's id is "chinook"/);
-  assert.match(withManifest((m) => { m.meaning.graph.address = 'meaning://github.com/someone/else'; }), /meaning.graph.address must be meaning:\/\/github.com\/datatug\/chinookdb \(in any case\), derived from publisher.repository/);
+  assert.match(withManifest((m) => { m.meaning.graph.address = 'meaning://github.com/someone/else'; }), /meaning.graph.address must be meaning:\/\/github.com\/datatug\/chinookdb \(lower case, as meaninggraph compares addresses exactly\), derived from publisher.repository/);
   assert.match(withManifest((m) => { delete m.licences.data; }), /licences.data is required/);
   assert.match(withManifest((m) => { m.licences.data = 'see the README'; }), /licences.data must be a known SPDX licence id/);
   assert.match(withManifest((m) => { m.licences.model = 'Foo'; }), /licences.model must be a known SPDX licence id .*got "Foo"/);
@@ -1221,12 +1221,12 @@ test('one grammar for the address, the module and the repository, as the registr
   assert.match(withManifest((m) => { m.publisher.url = 'https://github.com/..'; }), /publisher.url (must be https:\/\/github.com\/<owner>|is not written canonically)/);
 });
 
-test('an own manifest of a mixed-case or dot-named repository: model.address in lower case, meaning.graph.address in any case', () => {
+test('an own manifest of a mixed-case or dot-named repository: model.address and meaning.graph.address in lower case', () => {
   const own = (repo, change = () => {}) => {
     const doc = manifestDoc();
     doc.publisher.url = `https://github.com/${repo.split('/')[0]}`;
     doc.publisher.repository = `https://github.com/${repo}`;
-    doc.meaning.graph.address = `meaning://github.com/${repo}`;
+    doc.meaning.graph.address = `meaning://github.com/${repo.toLowerCase()}`;
     doc.model.address = `modelspec://github.com/${repo.toLowerCase()}/chinook`;
     change(doc);
     return manifestProblems({ 'ovdb.yaml': stringifyYaml(doc) }, {});
@@ -1238,13 +1238,12 @@ test('an own manifest of a mixed-case or dot-named repository: model.address in 
   assert.match(own('DataTug/ChinookDB', (doc) => { doc.model.address = 'modelspec://github.com/DataTug/ChinookDB/chinook'; }), /model.address .* must be written in lower case/);
   assert.match(own('DataTug/ChinookDB', (doc) => { doc.model.address = 'modelspec://github.com/datatug/chinookdb/Chinook'; }), /model.address must be modelspec:\/\/github.com\/datatug\/chinookdb\/chinook, this repository plus the module name/);
   assert.match(own('datatug/chinookdb', (doc) => { doc.model.address = 'modelspec://github.com/datatug/other/chinook'; }), /model.address must be modelspec:\/\/github.com\/datatug\/chinookdb\/chinook/);
-  // What the Directory enforces on meaning.graph.address: it equals the MeaningGraph registry's record verbatim, and that
-  // record is for this repository in whatever case the registry has it; publisher.repository may be in any case. Offline: this
-  // repository, in any case, whichever case publisher.repository is in.
-  for (const [repo, address] of [['DataTug/ChinookDB', 'meaning://github.com/datatug/chinookdb'], ['datatug/chinookdb', 'meaning://github.com/DataTug/ChinookDB'], ['DataTug/chinookdb', 'meaning://github.com/datatug/ChinookDB']]) {
-    assert.equal(own(repo, (doc) => { doc.meaning.graph.address = address; }), '', `${repo} with ${address}`);
+  // meaning.graph.address is written in lower case whatever case publisher.repository is in: meaninggraph compares addresses
+  // exactly, and check:meaning passes this address, so a mixed-case spelling would not match the lower-case references.
+  for (const [repo, address] of [['DataTug/ChinookDB', 'meaning://github.com/DataTug/ChinookDB'], ['datatug/chinookdb', 'meaning://github.com/DataTug/ChinookDB'], ['DataTug/chinookdb', 'meaning://github.com/datatug/ChinookDB'], ['DataTug/ChinookDB', 'meaning://github.com/DATATUG/chinookdb']]) {
+    assert.match(own(repo, (doc) => { doc.meaning.graph.address = address; }), /meaning.graph.address must be meaning:\/\/github.com\/datatug\/chinookdb \(lower case, as meaninggraph compares addresses exactly\), derived from publisher.repository/, `${repo} with ${address}`);
   }
-  assert.match(own('datatug/chinookdb', (doc) => { doc.meaning.graph.address = 'meaning://github.com/datatug/other'; }), /meaning.graph.address must be meaning:\/\/github.com\/datatug\/chinookdb \(in any case\), derived from publisher.repository/);
+  assert.match(own('datatug/chinookdb', (doc) => { doc.meaning.graph.address = 'meaning://github.com/datatug/other'; }), /meaning.graph.address must be meaning:\/\/github.com\/datatug\/chinookdb \(lower case, as meaninggraph compares addresses exactly\), derived from publisher.repository/);
   assert.match(own('datatug/chinookdb', (doc) => { doc.meaning.graph.address = 'meaning://github.com/datatug/chinookdb?ref=' + 'a'.repeat(40); }), /meaning.graph.address must be/);
 });
 
