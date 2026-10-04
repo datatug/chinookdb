@@ -422,11 +422,14 @@ and the Directory accept:
 - in an address the host, the organisation and the repository are written in
   lower case (GitHub does not tell the cases apart, the registries do), so a
   publisher whose repository is `DataTug/ChinookDB` writes
-  `modelspec://github.com/datatug/chinookdb/<module>`. An own manifest's
-  `meaning.graph.address` is written in lower case too, because `meaninggraph`
-  compares addresses exactly and `pnpm check:meaning` passes this address as
-  the graph's own, so it must name this repository (`publisher.repository`, in
-  any case) in lower case;
+  `modelspec://github.com/datatug/chinookdb/<module>`. The one exception is an
+  own manifest's `meaning.graph.address`: the Directory compares it verbatim with
+  the MeaningGraph registry's record of the graph (which is for this repository
+  in whatever case the registry spells it, and `publisher.repository` may be in any
+  case), so offline the checker only requires it to name this repository, in any
+  case; its exact spelling is the registry's, and the Directory checks it. `pnpm check:meaning`
+  passes the address from `ovdb.yaml` to `meaninggraph`, which compares addresses exactly, so a
+  spelling that differs in case from the meaning file's own self-references fails there, loudly;
 - a module name is a letter followed by letters, digits and `_`, with upper case
   allowed and case-sensitive (`Sales` and `sales` are two modules), never with a
   dot, because `<address>.<Entity>` is an entity reference (the Directory's
