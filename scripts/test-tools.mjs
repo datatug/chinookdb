@@ -1,4 +1,4 @@
-// Tests for the pinned tools (modelspec, meaninggraph), their installer, and the workflows that run them:
+// Tests for the pinned tools (modelspec, meaninggraph, ovdb), their installer, and the workflows that run them:
 // node --test scripts/test-tools.mjs. No network unless CHINOOK_TOOLS_ONLINE=1 (then every pinned archive is
 // downloaded and its SHA-256 compared with scripts/tools.json).
 import assert from 'node:assert/strict';
@@ -45,8 +45,8 @@ function fakeInstall(binDir, name, content = '#!/bin/sh\nexit 0\n') {
 
 // ---------------------------------------------------------------- the pins
 
-test('both tools are pinned to a release number and a SHA-256 for every platform, in one file', () => {
-  assert.deepEqual(Object.keys(pins.tools).sort(), ['meaninggraph', 'modelspec']);
+test('the tools are pinned to a release number and a SHA-256 for every platform, in one file', () => {
+  assert.deepEqual(Object.keys(pins.tools).sort(), ['meaninggraph', 'modelspec', 'ovdb']);
   for (const [name, pin] of Object.entries(pins.tools)) {
     assert.match(pin.version, /^\d+\.\d+\.\d+$/, `${name}: a release, never latest`);
     assert.deepEqual(Object.keys(pin.sha256).sort(), [...platforms].sort(), `${name}: every platform`);
@@ -55,6 +55,7 @@ test('both tools are pinned to a release number and a SHA-256 for every platform
   }
   assert.equal(pins.tools.modelspec.repository, 'modelspec-org/cli');
   assert.equal(pins.tools.meaninggraph.repository, 'meaninggraph/cli');
+  assert.equal(pins.tools.ovdb.repository, 'openvaultdb/ovdb');
 });
 
 test('loadPins refuses latest, a range, a short hash and a missing platform', () => {
@@ -94,6 +95,9 @@ test('the platform names are those of the release archives, and anything else ha
   assert.equal(platformKey('darwin', 'arm64'), 'darwin_arm64');
   for (const [platform, arch] of [['win32', 'x64'], ['linux', 'ia32'], ['freebsd', 'x64'], ['linux', 'ppc64']]) assert.equal(platformKey(platform, arch), null, `${platform}/${arch}`);
   assert.equal(archiveName('modelspec', pins.tools.modelspec, 'linux_amd64'), `modelspec_${pins.tools.modelspec.version}_linux_amd64.tar.gz`);
+  // ovdb's release archives are named and laid out as the others (<name>_<version>_<os>_<arch>.tar.gz, with the binary at the top), which is all the installer needs.
+  assert.equal(archiveName('ovdb', pins.tools.ovdb, 'linux_arm64'), `ovdb_${pins.tools.ovdb.version}_linux_arm64.tar.gz`);
+  assert.equal(releaseUrl('ovdb', pins.tools.ovdb, 'darwin_amd64'), `https://github.com/openvaultdb/ovdb/releases/download/v${pins.tools.ovdb.version}/ovdb_${pins.tools.ovdb.version}_darwin_amd64.tar.gz`);
   assert.equal(releaseUrl('meaninggraph', pins.tools.meaninggraph, 'darwin_arm64'), `https://github.com/meaninggraph/cli/releases/download/v${pins.tools.meaninggraph.version}/meaninggraph_${pins.tools.meaninggraph.version}_darwin_arm64.tar.gz`);
 });
 
@@ -474,7 +478,7 @@ test('runTool runs the verified binary from the repository root and returns its 
   let ran = 0;
   assert.throws(() => runTool('modelspec', ['lint'], { pins, binDir, run: () => { ran += 1; return { status: 0 }; } }), /the file is not the one the installer installed/);
   assert.equal(ran, 0, 'a replaced binary is not run');
-  assert.throws(() => run([], { pins }), (error) => error.exit === 2 && /usage: node scripts\/run-tool\.mjs <modelspec\|meaninggraph>/.test(error.message));
+  assert.throws(() => run([], { pins }), (error) => error.exit === 2 && /usage: node scripts\/run-tool\.mjs <modelspec\|meaninggraph\|ovdb>/.test(error.message));
   assert.throws(() => run(['specscore', 'lint'], { pins }), /usage/);
 });
 
@@ -644,21 +648,23 @@ const MODEL_TWIN = 'node scripts/run-tool.mjs modelspec export --check model/chi
 const MEANING_CHECK = 'node scripts/check-meaning.mjs';
 const SCHEMA_CHECK = 'node scripts/check-schema.mjs';
 const INSTALL = 'node scripts/install-tools.mjs --dir .tools/bin';
+const OVDB_CHECK = 'node scripts/run-tool.mjs ovdb publisher check --repository https://github.com/datatug/chinookdb';
 
 test('the package scripts are the three commands, the installer and nothing that guesses', () => {
   assert.equal(scripts['lint:model'], MODEL_LINT);
   assert.equal(scripts['check:model-twin'], MODEL_TWIN);
   assert.equal(scripts['check:meaning'], MEANING_CHECK);
   assert.equal(scripts['check:schema'], SCHEMA_CHECK);
+  assert.equal(scripts['check:ovdb'], OVDB_CHECK);
   assert.equal(scripts['tools:install'], INSTALL);
   assert.equal(scripts['test:tools'], 'node --test scripts/test-tools.mjs');
   assert.ok(!('lint:modelspec' in scripts), 'the repository\'s own lint script is gone');
   assert.ok(!existsSync(join(root, 'scripts', 'lint-modelspec.sh')));
-  assert.ok(!/(^|\s)(modelspec|meaninggraph)\s/.test(Object.values(scripts).join('\n').replace(/scripts\/run-tool\.mjs (modelspec|meaninggraph)/g, '')), 'a tool is only run through the runner, which checks the pinned release');
+  assert.ok(!/(^|\s)(modelspec|meaninggraph|ovdb)\s/.test(Object.values(scripts).join('\n').replace(/scripts\/run-tool\.mjs (modelspec|meaninggraph|ovdb)/g, '')), 'a tool is only run through the runner, which checks the pinned release');
 });
 
 for (const name of ['ci', 'deploy']) {
-  test(`${name}.yml installs both tools with the installer, then runs the three commands, in that order`, () => {
+  test(`${name}.yml installs the tools with the installer, then runs the commands, in that order`, () => {
     const ran = commands(workflows[name]);
     const at = (command) => {
       assert.equal(ran.filter((candidate) => candidate === command).length, 1, `exactly one step runs: ${command}`);
@@ -672,12 +678,19 @@ for (const name of ['ci', 'deploy']) {
     assert.ok(installAt < lintAt && lintAt < twinAt && twinAt < meaningAt && meaningAt < schemaAt, 'install, lint, twin, meaning graph, embedded schema');
     assert.ok(installAt < ran.indexOf(scripts.build), 'the tools are installed before the build');
     assert.ok(ran.includes(scripts['test:tools']), 'the tool tests run in this workflow');
-    assert.ok(ran.includes(scripts['test:model']) && ran.includes(scripts['check:ovdb']), 'the checks that stay still run');
+    assert.ok(ran.includes(scripts['test:model']), 'the model tests still run');
+    // ovdb publisher check runs after the installer, with the git version printed before it (it needs git 2.45 or newer), through the runner, as the only step that runs it.
+    const ovdbAt = at(OVDB_CHECK);
+    assert.ok(installAt < ovdbAt && ran.indexOf('git --version') > installAt && ran.indexOf('git --version') < ovdbAt, 'install, git --version, ovdb publisher check');
+    const checkout = jobSteps(workflows[name]).find((step) => /actions\/checkout@/.test(step.uses ?? ''));
+    assert.equal(checkout.with['fetch-depth'], 0, 'the check reads the commit with git: the checkout has the history and a real .git');
+    assert.ok(!('filter' in checkout.with), 'a partial clone is refused by ovdb publisher check');
     if (name === 'deploy') {
       const steps = jobSteps(workflows.deploy);
       const deployAt = steps.findIndex((step) => step.name === 'Deploy');
       const checkAt = steps.findIndex((step) => step.run === 'pnpm check:schema');
       assert.ok(checkAt > -1 && checkAt < deployAt, 'every check runs before the deploy');
+      assert.ok(steps.findIndex((step) => step.run === 'pnpm check:ovdb') < deployAt, 'the OVDB check runs before the deploy');
     }
   });
 
@@ -686,7 +699,7 @@ for (const name of ['ci', 'deploy']) {
     for (const step of steps.filter((candidate) => candidate.uses)) assert.match(step.uses, /^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/, step.uses);
     for (const step of steps.filter((candidate) => candidate.run)) {
       assert.doesNotMatch(step.run, /\b(curl|wget|brew|go install|self-update|npx|latest)\b/, step.run);
-      assert.doesNotMatch(step.run, /(^|[\s;&|])(modelspec|meaninggraph)(\s|$)/, `${step.run}: a tool is run through its package script, not by name`);
+      assert.doesNotMatch(step.run, /(^|[\s;&|])(modelspec|meaninggraph|ovdb)(\s|$)/, `${step.run}: a tool is run through its package script, not by name`);
     }
     for (const [id, job] of Object.entries(workflows[name].jobs)) assert.ok(Number.isInteger(job['timeout-minutes']) && job['timeout-minutes'] > 0, `job ${id} has a timeout`);
     assert.ok(!steps.some((step) => step['continue-on-error']), 'no check can fail silently');

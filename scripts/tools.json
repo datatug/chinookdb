@@ -1,6 +1,6 @@
 {
   "format": "chinookdb-tools/1",
-  "note": "The released command-line tools that validate the model and the meaning graph, pinned by version and by the SHA-256 of each release archive (the line of the archive in the release's <tool>_<version>_checksums.txt). scripts/install-tools.mjs is the only reader that downloads them; it refuses an archive whose hash differs. To move to a newer release, change the version and every hash together, then run pnpm test:tools.",
+  "note": "The released command-line tools that validate the model, the meaning graph and the OVDB publisher manifest, pinned by version and by the SHA-256 of each release archive (the line of the archive in the release's checksums file: <tool>_<version>_checksums.txt, or checksums.txt for ovdb, and each hash was checked against the downloaded archive). scripts/install-tools.mjs is the only reader that downloads them; it refuses an archive whose hash differs. To move to a newer release, change the version and every hash together, then run pnpm test:tools.",
   "tools": {
     "modelspec": {
       "version": "0.1.1",
@@ -20,6 +20,16 @@
         "darwin_arm64": "635b1560c62be0fc68ab581513ac9a6963af2857f3eaad3d7c0ea5de04998ecf",
         "linux_amd64": "582c109132d26db1b940e6af757185c821e318ba7aa0ad073e30daa788e15767",
         "linux_arm64": "ad64e471b9de23523b6fe896f9d3dc6abccc06b2d73009c76818aa542e75872b"
+      }
+    },
+    "ovdb": {
+      "version": "0.29.0",
+      "repository": "openvaultdb/ovdb",
+      "sha256": {
+        "darwin_amd64": "85cdf5f741af8b03327648acc4c520e486b266676d6f3c772660b3008ea35b0a",
+        "darwin_arm64": "4183da12330c2e5d785732f66fb82b8e42e9861502a9f41db908653c8f06ef45",
+        "linux_amd64": "ffb0054d2663a0bc681697a77c7783c0f4011dce0ff461facd3ee572cff7de26",
+        "linux_arm64": "0625c62f84825a84e1452aa6d6eb112e8a6ac065bf2f10b01edfecd9a96191a6"
       }
     }
   }

@@ -9,8 +9,8 @@
 # each pinned with ?ref=<40 hex> to the commit that is read. Every hoster of Chinook points at the same two
 # addresses, so every one of them is a database of the same model.
 #
-# Offline check:   node scripts/check-ovdb-manifest.mjs --repository https://github.com/example_org/chinook-hosting <directory>
-# (it checks the shape only; the Directory checks the addresses against the ModelSpec and MeaningGraph registries.)
+# Offline check:   ovdb publisher check --repository https://github.com/example_org/chinook-hosting <directory>
+# (the files must be committed; it checks the shape only, and the Directory checks the addresses against the ModelSpec and MeaningGraph registries.)
 format: ovdb-manifest/draft-1
 
 # PLACEHOLDER: your id. Lower-case letters, digits and single hyphens; it names your Directory record.

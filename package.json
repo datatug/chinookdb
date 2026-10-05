@@ -18,7 +18,7 @@
     "check:model-twin": "node scripts/run-tool.mjs modelspec export --check model/chinook.modelspec.hcl model/chinook.modelspec.json",
     "check:meaning": "node scripts/check-meaning.mjs",
     "check:schema": "node scripts/check-schema.mjs",
-    "check:ovdb": "node scripts/check-ovdb-manifest.mjs --repository https://github.com/datatug/chinookdb",
+    "check:ovdb": "node scripts/run-tool.mjs ovdb publisher check --repository https://github.com/datatug/chinookdb",
     "check:drift": "node scripts/check-data-drift.mjs",
     "test:worker": "node --import tsx/esm scripts/test-worker.ts"
   },
