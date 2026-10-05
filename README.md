@@ -284,10 +284,10 @@ ignored file is refused, because the Directory reads the published commit.
   the deployment serves.
 
 The manifest holds no secrets and claims no capabilities; what the server can
-do comes from its own discovery document. The checker refuses unknown keys, and
-holds every URL to the Directory's URL rules (see "What the pre-check checks"
-below). `pnpm check:ovdb` runs it on this repository's `HEAD`; `pnpm test:model`
-runs it too, and the negative cases for both forms.
+do comes from its own discovery document. The check refuses unknown keys, and
+holds every URL to the Directory's URL rules (see "What the check checks"
+below). `pnpm check:ovdb` runs `ovdb publisher check` on this repository, as it
+is committed at `HEAD`.
 
 The manifest check fails when `OVDB.md` does not parse, when a file named in
 `OVDB.md` or `ovdb.yaml` is missing or is not a tracked regular file, when
@@ -301,25 +301,32 @@ entities), or when the recordsets are not exactly the ModelSpec entities (for a
 shared model, which the checker cannot read, when a recordset name is not an
 entity name or is listed twice).
 
-What `pnpm test:model` reads, and from where:
+What `pnpm check:ovdb` reads, and from where:
 
-- The check of this repository reads git's HEAD only. It asks git what HEAD
-  holds (`git ls-tree`) and reads each file from HEAD (`git cat-file blob
-  HEAD:<path>`). A path such as `:/x` is taken literally, never as git's path
-  syntax. So an edit that is not committed, and a new file that is not
-  committed yet, are not seen by that check.
-- The tests that make the check fail on purpose copy `OVDB.md`, `ovdb.yaml`
-  and the model and meaning files from the working tree into a scratch
-  repository, commit them there and check that copy first. So an uncommitted
-  edit to one of those files can still fail the tests, even though the check of
-  this repository ignores it.
-- The other tests in the file (generated files, checksums, the meaning checks)
-  read the working tree.
+- `ovdb publisher check` reads the commit at `HEAD` with `git` (2.45 or newer),
+  never the working tree: `OVDB.md`, the manifest and the files they name, as
+  committed. **An edit that is not committed, and a new file that is not committed
+  yet, are not seen by this check**: commit first (the JavaScript checker that this
+  replaced read `HEAD` too, so that has not changed). It needs a real `.git` with
+  the commit in it; a shallow clone is fine, a partial clone (`--filter`) is
+  refused, and nothing is fetched. CI checks out the full history and prints the
+  `git` version.
+- It never uses the network, and starts no server.
+- The release of `ovdb` is pinned in `scripts/tools.json` by version and by the
+  SHA-256 of each archive, like `modelspec` and `meaninggraph`, and installed by
+  `pnpm tools:install` into `.tools/bin`; `check:ovdb` runs it through
+  `scripts/run-tool.mjs`, which refuses a binary the installer did not install.
+- Exit codes: `0` nothing is wrong, `1` the repository is refused (the findings
+  are printed), `2` the command could not run as asked (a usage error, `git`
+  missing or too old). The manual of the command is the "For publishers" section
+  of the [ovdb README](https://github.com/openvaultdb/ovdb#for-publishers-ovdb-publisher-check).
+- The tests in `scripts/test-model.mjs` (generated files, checksums, the meaning
+  checks) read the working tree.
 
 ### The two forms of a manifest
 
-The OVDB Directory accepts a manifest in one of two forms, and the checker
-(`scripts/lib/ovdb-manifest.mjs`) knows both. The forms never mix: a manifest
+The OVDB Directory accepts a manifest in one of two forms, and the check
+knows both. The forms never mix: a manifest
 with local model files (`model.modelspec` or `model.hcl`) is an own-model
 manifest, any other is a shared-model manifest.
 
@@ -346,22 +353,20 @@ and no local meaning file, `model.address` and `meaning.address` both pinned wit
 and `model.name`. Neither address may name the publisher's own repository. See
 [`examples/hoster/`](examples/hoster/) for a complete one.
 
-### What the pre-check checks, and what it does not
+### What the check checks, and what it does not
 
-The checker (`pnpm check:ovdb`, `scripts/check-ovdb-manifest.mjs`) is an offline
-pre-check. **The OVDB Directory is the authority**: it checks everything again,
-at the commit it reads, and a manifest that passes here can still be refused
-there. Its output says so for both forms of manifest, and lists what is not
-checked. It takes an optional directory (`node scripts/check-ovdb-manifest.mjs
-examples/hoster`); a directory that is not the root of its repository is checked
-as if it were the root, and the output says that the Directory reads `OVDB.md`
-at the root.
+The check (`pnpm check:ovdb`, which runs `ovdb publisher check`) is offline.
+**The OVDB Directory is the authority**: it checks everything again, at the
+commit it reads, and also reads the hosted repository, so a manifest that passes
+here can still be refused there. The check applies the Directory's rules for
+`OVDB.md` and the manifests, and the stricter rules a publisher's own check uses
+(the rules of the `ovdb` repository's `internal/publisher/manifest` and
+`internal/publisher/rules` packages, proved against this repository's former
+JavaScript checker). To check another repository's files, run `ovdb publisher
+check <directory> --repository <url>` in a clone of it.
 
-It checks, with the Directory's own rules (`scripts/lib/directory-rules.mjs`
-mirrors `scripts/lib/urls.mjs` and `scripts/lib/directory.mjs` of
-`openvaultdb/directory`, including its refusal of any port and of any percent
-escape in a path and its `homepage` rule; the list of single-field edits in
-`scripts/test-model.mjs` pins the agreement):
+It checks, with the Directory's own rules (including its refusal of any port and
+of any percent escape in a path, and its `homepage` rule):
 
 - every URL field (`url`, `deployment.url`, `deployment.discovery`,
   `deployment.recordset_page`, `publisher.url`, `homepage`): public https,
@@ -467,10 +472,10 @@ organisation name with an underscore, which no GitHub account can have, marked
 `PLACEHOLDER` in the file, so that the example cannot be listed as it stands.
 
 To list a database: copy the two files, replace the placeholders, commit, and
-pre-check them offline with `node scripts/check-ovdb-manifest.mjs --repository
+check them offline with `ovdb publisher check --repository
 https://github.com/<you>/<repository> <directory>` (it reads `HEAD`, so the files
-must be committed; a pass is not the Directory's verdict, see "What the
-pre-check checks"). Then open a pull request to
+must be committed; a pass is not the Directory's verdict, see "What the check
+checks"). Then open a pull request to
 [`openvaultdb/directory`](https://github.com/openvaultdb/directory) that adds one
 record for the database (repository, commit, manifest path, canonical URL and
 MeaningGraph id `chinook`). The Directory then checks the addresses against the

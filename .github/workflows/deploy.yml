@@ -61,10 +61,13 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # modelspec and meaninggraph at the release and SHA-256 pinned in scripts/tools.json: the installer refuses
+      # modelspec, meaninggraph and ovdb at the release and SHA-256 pinned in scripts/tools.json: the installer refuses
       # an archive whose hash differs, and puts the binaries in .tools/bin.
-      - name: Install the pinned modelspec and meaninggraph
+      - name: Install the pinned modelspec, meaninggraph and ovdb
         run: pnpm tools:install
+      # ovdb publisher check needs git 2.45 or newer (it refuses an older one, exit 2); the version is in the log.
+      - name: git version
+        run: git --version
       - run: pnpm build
       - run: pnpm validate
       - run: pnpm test:data
@@ -78,7 +81,9 @@ jobs:
           path: .cache/meaning-sources
           key: meaning-sources-${{ hashFiles('model/*.meaning.yaml') }}
       - run: pnpm test:model
-      - name: OVDB manifest (offline)
+      # ovdb publisher check, offline, on the commit at HEAD (not the working tree): exit 0 nothing wrong, 1 the repository
+      # is refused (the findings are in the log above the failure), 2 it could not run as asked. Any other code fails the job.
+      - name: OVDB manifest (ovdb publisher check)
         run: pnpm check:ovdb
       - name: Generated model files are committed
         run: |
