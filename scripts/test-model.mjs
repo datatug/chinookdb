@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { cleanGitEnv, isolatedGitEnv } from './lib/git-env.mjs';
-import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -10,6 +10,7 @@ import { parse as parseYaml } from 'yaml';
 import { listDataFiles, listTrackedFiles, verifyChecksums } from './lib/checksums.mjs';
 import { checkoutGit, coreRepo, createResolver, effectiveValues, indexConcepts, matchValues, parseConceptRef, parseModelRef, pinsOf, valueCoverageProblems } from './lib/meaning.mjs';
 import { compareModelWithData, parseHcl, toModelspecJson, validateModel } from './lib/modelspec.mjs';
+import { captureTool } from './lib/tools.mjs';
 import { buildModelJson, chinookModule, listModelFiles, modelChecksumsPath, modelDir } from './generate-model.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -813,6 +814,119 @@ test('the drift guard acts on its own repository, whatever git variables a hook 
   assert.match(allowed.stdout, /Data drift guard passed against .* \(1 changed files\)/);
   assert.equal(drift('0'.repeat(40)).status, 0, 'no base revision, nothing to compare');
   assert.deepEqual(snapshot(), before, 'the repository the hook came from is untouched by the drift guard');
+});
+
+// What the repository says about itself in OVDB.md and ovdb.yaml. `ovdb publisher check` (pnpm check:ovdb) accepts any valid
+// manifest; these assertions hold this repository's own to the values it publishes. The files are read from the working tree.
+const frontmatterOf = (text) => {
+  const found = /^---\n([\s\S]*?)\n---\n/.exec(text);
+  assert.ok(found, 'the file opens with YAML front matter');
+  return parseYaml(found[1]);
+};
+const ovdbUsage = (status, stdout, stderr) => `exit ${status}\n${stdout}${stderr}`;
+// Runs the pinned ovdb (installed by pnpm tools:install, as before this test in CI) on a directory, for a publisher repository.
+const ovdbCheck = (directory, repository) => {
+  const { status, stdout, stderr } = captureTool('ovdb', ['publisher', 'check', '--repository', repository, directory]);
+  return { status, text: ovdbUsage(status, stdout.toString(), stderr) };
+};
+const selfUrl = `https://${selfRepo}`;
+
+test('OVDB.md and ovdb.yaml in this repository are a valid publisher manifest', () => {
+  // The pinned binary on this repository (its HEAD), as pnpm check:ovdb runs it.
+  const own = ovdbCheck(root, selfUrl);
+  assert.equal(own.status, 0, own.text);
+  assert.deepEqual(frontmatterOf(read('OVDB.md')), { ovdb: 1, publish: ['./ovdb.yaml'] });
+  const doc = parseYaml(read('ovdb.yaml'));
+  assert.equal(doc.url, 'https://chinookdb.com/ovdb/dbs/chinook');
+  assert.equal(doc.homepage, 'https://chinookdb.com/');
+  assert.equal(doc.deployment.discovery, 'https://chinookdb.com/.well-known/openvaultdb', 'discovery is where the canonical url is listed');
+  assert.deepEqual([...doc.recordsets].sort(), Object.keys(model.entities).sort(), 'recordsets are exactly the ModelSpec entities');
+  assert.deepEqual(doc.licences, { data: 'MIT', model: 'MIT', meaning: meaning.license });
+  assert.equal(doc.model.address, `modelspec://${selfRepo}/${model.module.name}`, 'the registry address is this repository plus the module name');
+  assert.equal(model.module.id, `${selfRepo}/model/${model.module.name}`, 'module.id includes the model/ directory; the registry address does not');
+  assert.equal(doc.meaning.graph.id, meaning.id);
+});
+
+test('the data licence is the upstream one: MIT, Copyright Luis Rocha', () => {
+  assert.match(read('data-source/UPSTREAM-LICENSE.md'), /Copyright \(c\) 2008-2024 Luis Rocha/);
+  assert.match(read('data-source/UPSTREAM-LICENSE.md'), /Permission is hereby granted, free of charge/);
+  assert.equal(parseYaml(read('ovdb.yaml')).licences.data, 'MIT');
+});
+
+// examples/hoster: what someone who hosts their own copy of Chinook commits to their repository.
+const exampleDir = join(root, 'examples', 'hoster');
+const exampleRepository = 'https://github.com/example_org/chinook-hosting';
+const examplePin = '8c9e62ed6641c0a00faa3867167d928af4c44b06'; // the commit of this repository that the three registries pin
+const atPin = (path) => exec('git', ['-C', root, 'show', `${examplePin}:${path}`], { stdio: 'pipe', maxBuffer: 64 * 1024 * 1024 }).toString();
+const exampleDoc = () => parseYaml(readFileSync(join(exampleDir, 'ovdb.yaml'), 'utf8'));
+// What the Directory's own tests write for a shared-model manifest (hosterManifest in openvaultdb/directory
+// scripts/test.mjs): these keys, at these levels. The list is copied by hand; the Directory's fixture is not read here,
+// so this test cannot notice a change in it. `homepage` is the one optional key the example adds.
+const directoryHosterKeys = {
+  '': ['deployment', 'description', 'format', 'id', 'licences', 'meaning', 'model', 'publisher', 'recordsets', 'title', 'url'],
+  deployment: ['discovery', 'engine', 'recordset_page', 'url'],
+  model: ['address'],
+  meaning: ['address', 'file', 'graph'],
+  'meaning.graph': ['id'],
+  publisher: ['name', 'repository', 'url'],
+  licences: ['data'],
+};
+
+test('examples/hoster passes the pinned ovdb check, has the keys of a shared manifest as the Directory\'s tests write it, and pins a commit that exists', () => {
+  // A throwaway Git repository of the example alone, as a hoster would commit it. The check reads its HEAD.
+  const dir = join(scratch, `example-repo-${scratchCount++}`);
+  mkdirSync(dir);
+  for (const name of ['OVDB.md', 'ovdb.yaml']) copyFileSync(join(exampleDir, name), join(dir, name));
+  gitIn(dir, 'init', '-q', '-b', 'main');
+  gitIn(dir, 'add', '.');
+  commitAs(dir, '-m', 'example');
+  const accepted = ovdbCheck(dir, exampleRepository);
+  assert.equal(accepted.status, 0, accepted.text);
+  const refused = ovdbCheck(dir, selfUrl);
+  assert.equal(refused.status, 1, `the example is not the manifest of ${selfUrl}\n${refused.text}`);
+  assert.match(refused.text, /publisher\.repository/, 'and the finding names the repository the manifest claims');
+
+  assert.deepEqual(frontmatterOf(readFileSync(join(exampleDir, 'OVDB.md'), 'utf8')), { ovdb: 1, publish: ['./ovdb.yaml'] });
+  const doc = exampleDoc();
+  for (const [where, keys] of Object.entries(directoryHosterKeys)) {
+    const object = where === '' ? doc : where.split('.').reduce((value, key) => value[key], doc);
+    assert.deepEqual(Object.keys(object).filter((key) => !(where === '' && key === 'homepage')).sort(), keys, `keys of ${where || 'the manifest'}`);
+  }
+  assert.equal(doc.format, 'ovdb-manifest/draft-1');
+  assert.equal(doc.model.address, `modelspec://github.com/datatug/chinookdb/chinook?ref=${examplePin}`);
+  assert.equal(doc.meaning.address, `meaning://github.com/datatug/chinookdb?ref=${examplePin}`);
+  assert.equal(doc.meaning.file, 'model/chinook.meaning.yaml');
+  assert.deepEqual(doc.meaning.graph, { id: 'chinook' });
+  assert.equal(doc.licences.data, 'MIT');
+  assert.equal(doc.publisher.repository, exampleRepository);
+  assert.equal(doc.publisher.url, 'https://github.com/example_org');
+  assert.equal(new URL(doc.deployment.discovery).origin, new URL(doc.url).origin, 'the discovery document is on the canonical origin');
+
+  // The pin: a commit of this repository, with the model and the meaning file the addresses name. It is read from this
+  // clone, so a shallow clone cannot run this test.
+  try {
+    exec('git', ['-C', root, 'cat-file', '-e', `${examplePin}^{commit}`], { stdio: 'pipe' });
+    exec('git', ['-C', root, 'merge-base', '--is-ancestor', examplePin, 'HEAD'], { stdio: 'pipe' });
+  } catch {
+    assert.fail(`the commit ${examplePin} that the example pins is not in this clone's history (a shallow clone?). This test reads the model and the meaning file at that commit: run git fetch --unshallow, or check out with fetch-depth: 0 (CI does).`);
+  }
+  const pinned = JSON.parse(atPin('model/chinook.modelspec.json'));
+  assert.equal(pinned.module.name, 'chinook', 'the module of the address');
+  assert.deepEqual([...doc.recordsets].sort(), Object.keys(pinned.entities).sort(), 'recordsets are exactly the entities of the model at the pin');
+  assert.equal(parseYaml(atPin('model/chinook.meaning.yaml')).id, doc.meaning.graph.id, 'the meaning file at the pin is the graph the id names');
+  assert.ok(atPin('model/chinook.modelspec.hcl').length > 0, 'the model source exists at the pin');
+
+  // Placeholders: marked, on example.com, and an organisation name that no GitHub account can have (it has an underscore),
+  // so the example cannot be listed as it stands. The owner of a real organisation named example-co could have.
+  const text = readFileSync(join(exampleDir, 'ovdb.yaml'), 'utf8');
+  assert.ok(text.split('PLACEHOLDER').length - 1 >= 6, 'each value to replace is marked');
+  for (const value of [doc.url, doc.deployment.url, doc.deployment.discovery, doc.deployment.recordset_page, doc.homepage]) {
+    assert.match(new URL(value.replace('{name}', 'x')).hostname, /(^|\.)example\.com$/, value);
+  }
+  assert.match(new URL(doc.publisher.repository).pathname.split('/')[1], /_/, 'an organisation name GitHub cannot issue');
+  assert.doesNotMatch(text, /example-co|nobody's/);
+  assert.match(readFileSync(join(exampleDir, 'OVDB.md'), 'utf8'), /must not be listed in the Directory as they stand/);
+  assert.match(text, /must not be\n# listed in the Directory as it stands/);
 });
 
 test('the test helpers refuse to write outside a scratch repository', () => {
