@@ -3,23 +3,23 @@
   "note": "The released command-line tools that validate the model, the meaning graph and the OVDB publisher manifest, pinned by version and by the SHA-256 of each release archive (the line of the archive in the release's checksums file: <tool>_<version>_checksums.txt, or checksums.txt for ovdb, and each hash was checked against the downloaded archive). scripts/install-tools.mjs is the only reader that downloads them; it refuses an archive whose hash differs. To move to a newer release, change the version and every hash together, then run pnpm test:tools.",
   "tools": {
     "modelspec": {
-      "version": "0.1.1",
+      "version": "0.2.0",
       "repository": "modelspec-org/cli",
       "sha256": {
-        "darwin_amd64": "0278f91d6e8599a31369e72e8bfae697e1d56ba018df47e26709039ddde434e6",
-        "darwin_arm64": "1bd17601bc4655072db62e4137960fdd0380b95192db9201ba7a231c95d8eb29",
-        "linux_amd64": "a8af1cd0784759f284a5799e6de3261b1e81677ac47a6b5a895d2734d1e2613d",
-        "linux_arm64": "a92db84e23902044390fcf9036c56b153ee893cd60c3d05b1222edd6ce1f7b3c"
+        "darwin_amd64": "92bec574afe086a36732fd2125168c53714310dfe19e2c6b94b90a341815c9c9",
+        "darwin_arm64": "356f09f106510f5d63e55591c1380ce075d5b86c24910c4482308af157c18e5d",
+        "linux_amd64": "95b999570c633a4eba07014dccaf31dc71cfc9e9e7711c3cc254cb377bc2ddbc",
+        "linux_arm64": "6b36775eca795d7538ab946d1b116978e5fdff6bc0b0bad86082df44999c9220"
       }
     },
     "meaninggraph": {
-      "version": "0.2.0",
+      "version": "0.3.0",
       "repository": "meaninggraph/cli",
       "sha256": {
-        "darwin_amd64": "15cbdcc04df5316eb9df12ad9b512db828bac5ae9bb62e8c75ab43b185db8ae7",
-        "darwin_arm64": "635b1560c62be0fc68ab581513ac9a6963af2857f3eaad3d7c0ea5de04998ecf",
-        "linux_amd64": "582c109132d26db1b940e6af757185c821e318ba7aa0ad073e30daa788e15767",
-        "linux_arm64": "ad64e471b9de23523b6fe896f9d3dc6abccc06b2d73009c76818aa542e75872b"
+        "darwin_amd64": "5d2fb02a66df0a8c856e971a30dfe6fd4ad010458f1bd24f202d5b9351255039",
+        "darwin_arm64": "d84ced6daed43607452cddf375eeba104be88966cba0071b24b4c7a0412be6de",
+        "linux_amd64": "f8073b9ab5547551e00d021fcd83c4ff52c4a49034f9ee5719512dfade9afdf8",
+        "linux_arm64": "8d20af9d39855eb7bed78af9fd5a62623fd3cab7241d6f371313a82bc37c4221"
       }
     },
     "ovdb": {

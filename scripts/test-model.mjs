@@ -9,7 +9,7 @@ import { after, test } from 'node:test';
 import { parse as parseYaml } from 'yaml';
 import { listDataFiles, listTrackedFiles, verifyChecksums } from './lib/checksums.mjs';
 import { checkoutGit, coreRepo, createResolver, effectiveValues, indexConcepts, matchValues, parseConceptRef, parseModelRef, pinsOf, valueCoverageProblems } from './lib/meaning.mjs';
-import { compareModelWithData, parseHcl, toModelspecJson, validateModel } from './lib/modelspec.mjs';
+import { compareModelWithData, parseHcl, toModelspecJson, validateModel, vocabularyOf } from './lib/modelspec.mjs';
 import { captureTool } from './lib/tools.mjs';
 import { buildModelJson, chinookModule, listModelFiles, modelChecksumsPath, modelDir } from './generate-model.mjs';
 
@@ -37,6 +37,12 @@ const coreIndex = resolve(coreRepo, corePin);
 if (coreIndex.error) throw new Error(coreIndex.error);
 const chinook = (doc = meaning) => indexConcepts([{ path: join(root, meaningPath), doc }]);
 const clone = (value) => structuredClone(value);
+// A model's record types and their members, in the vocabulary its identifier names: 1.0-draft says entities, properties
+// and entity, 1.0-draft-2 says records, fields and record. The model itself stays in whichever the HCL source is in.
+const wordsOf = (json) => vocabularyOf(json);
+const recordsOf = (json) => json[wordsOf(json).records];
+const membersOf = (json, record) => recordsOf(json)[record][wordsOf(json).fields];
+const referenceOf = (json, record, member) => membersOf(json, record)[member][wordsOf(json).record];
 const coreUrl = `meaning://${coreRepo}`;
 const coreRef = (id, pin = corePin) => `${coreUrl}/${id}?ref=${pin}`;
 
@@ -87,11 +93,11 @@ test('only git-tracked files without a leading dot are published and checksummed
 
 test('the model is structurally valid ModelSpec with all 11 Chinook entities', () => {
   assert.deepEqual(validateModel(model), []);
-  assert.deepEqual(Object.keys(model.entities), ['Artist', 'Album', 'Track', 'Genre', 'MediaType', 'Playlist', 'PlaylistTrack', 'Customer', 'Employee', 'Invoice', 'InvoiceLine']);
-  assert.equal(model.entities.Employee.properties.ReportsTo.entity, 'Employee', 'self-reference');
-  assert.equal(model.entities.Customer.properties.SupportRepId.entity, 'Employee');
-  assert.deepEqual(model.entities.PlaylistTrack.key, ['PlaylistId', 'TrackId'], 'many-to-many through PlaylistTrack');
-  assert.equal(model.entities.PlaylistTrack.properties.TrackId.entity, 'Track');
+  assert.deepEqual(Object.keys(recordsOf(model)), ['Artist', 'Album', 'Track', 'Genre', 'MediaType', 'Playlist', 'PlaylistTrack', 'Customer', 'Employee', 'Invoice', 'InvoiceLine']);
+  assert.equal(referenceOf(model, 'Employee', 'ReportsTo'), 'Employee', 'self-reference');
+  assert.equal(referenceOf(model, 'Customer', 'SupportRepId'), 'Employee');
+  assert.deepEqual(recordsOf(model).PlaylistTrack.key, ['PlaylistId', 'TrackId'], 'many-to-many through PlaylistTrack');
+  assert.equal(referenceOf(model, 'PlaylistTrack', 'TrackId'), 'Track');
 });
 
 test('the model matches the published data: tables, columns, keys, references, nullability, types and values', () => {
@@ -107,22 +113,22 @@ test('the model check fails when a column is renamed, a type or nullability chan
   assert.ok(problems.includes('Track.Name is in the model but not in the data'));
 
   const broken = clone(model);
-  broken.entities.Invoice.properties.Total.type = 'int';
-  broken.entities.Album.properties.Title.required = false;
-  broken.entities.Album.properties.ArtistId = { type: 'int', required: true };
+  membersOf(broken, 'Invoice').Total.type = 'int';
+  membersOf(broken, 'Album').Title.required = false;
+  membersOf(broken, 'Album').ArtistId = { type: 'int', required: true };
   const more = compareModelWithData(broken, schema, data);
   assert.ok(more.includes('Invoice.Total is int in the model, NUMERIC(10,2) (decimal) in the data'), more.join('\n'));
   assert.ok(more.includes('Album.Title is optional in the model but NOT NULL in the data'));
   assert.ok(more.includes('Album.ArtistId references Artist in the data but the model says type int'));
 
   const extraTable = clone(model);
-  delete extraTable.entities.Genre;
+  delete recordsOf(extraTable).Genre;
   assert.match(compareModelWithData(extraTable, schema, data)[0], /differ from data tables/);
 });
 
 test('every constraint the model states is checked against the rows: unique, pattern, min_len, enum, format', () => {
   const constrained = clone(model);
-  const property = (entity, name) => constrained.entities[entity].properties[name];
+  const property = (entity, name) => membersOf(constrained, entity)[name];
   Object.assign(property('Artist', 'ArtistId'), { unique: true });
   Object.assign(property('Genre', 'Name'), { min_len: 1, pattern: '[A-Za-z0-9 &/\'-]+' });
   assert.deepEqual(compareModelWithData(constrained, schema, data), [], 'constraints that hold pass');
@@ -840,7 +846,7 @@ test('OVDB.md and ovdb.yaml in this repository are a valid publisher manifest', 
   assert.equal(doc.url, 'https://chinookdb.com/ovdb/dbs/chinook');
   assert.equal(doc.homepage, 'https://chinookdb.com/');
   assert.equal(doc.deployment.discovery, 'https://chinookdb.com/.well-known/openvaultdb', 'discovery is where the canonical url is listed');
-  assert.deepEqual([...doc.recordsets].sort(), Object.keys(model.entities).sort(), 'recordsets are exactly the ModelSpec entities');
+  assert.deepEqual([...doc.recordsets].sort(), Object.keys(recordsOf(model)).sort(), 'recordsets are exactly the ModelSpec entities');
   assert.deepEqual(doc.licences, { data: 'MIT', model: 'MIT', meaning: meaning.license });
   assert.equal(doc.model.address, `modelspec://${selfRepo}/${model.module.name}`, 'the registry address is this repository plus the module name');
   assert.equal(model.module.id, `${selfRepo}/model/${model.module.name}`, 'module.id includes the model/ directory; the registry address does not');
@@ -912,7 +918,7 @@ test('examples/hoster passes the pinned ovdb check, has the keys of a shared man
   }
   const pinned = JSON.parse(atPin('model/chinook.modelspec.json'));
   assert.equal(pinned.module.name, 'chinook', 'the module of the address');
-  assert.deepEqual([...doc.recordsets].sort(), Object.keys(pinned.entities).sort(), 'recordsets are exactly the entities of the model at the pin');
+  assert.deepEqual([...doc.recordsets].sort(), Object.keys(recordsOf(pinned)).sort(), 'recordsets are exactly the entities of the model at the pin');
   assert.equal(parseYaml(atPin('model/chinook.meaning.yaml')).id, doc.meaning.graph.id, 'the meaning file at the pin is the graph the id names');
   assert.ok(atPin('model/chinook.modelspec.hcl').length > 0, 'the model source exists at the pin');
 

@@ -13,7 +13,14 @@ type Binding = { model: string; property?: string; role: string };
 type Concept = { id: string; kind: string; labels: Record<string, string>; extends?: string; 'values-of'?: string; unit?: string; source?: string; bindings?: Binding[]; measure?: { inputs?: string[] } };
 
 const meaning = parseYaml(readFileSync(join(process.cwd(), 'model', 'chinook.meaning.yaml'), 'utf8')) as { concepts: Concept[] };
-const entities = Object.entries(model.entities as Record<string, { key: string[]; properties: Record<string, Property> }>);
+// The model is read in the vocabulary its identifier names: 1.0-draft says entities, properties and entity;
+// 1.0-draft-2 says records, fields and record. The page below uses the first set of words for both.
+const words = (model as { modelspec: string }).modelspec === '1.0-draft-2' ? { records: 'records', fields: 'fields', record: 'record' } : { records: 'entities', fields: 'properties', record: 'entity' };
+const rawRecords = (model as unknown as Record<string, Record<string, { key: string[] } & Record<string, unknown>>>)[words.records];
+const entities = Object.entries(rawRecords).map(([name, raw]) => [name, {
+  key: raw.key ?? [],
+  properties: Object.fromEntries(Object.entries(raw[words.fields] as Record<string, Record<string, unknown>>).map(([field, member]) => [field, { ...member, entity: member[words.record] } as Property])),
+}] as const);
 const files = [
   ['chinook.modelspec.hcl', 'ModelSpec model', 'The data model as authored: 11 entities, their properties, keys and references.'],
   ['chinook.modelspec.json', 'ModelSpec JSON', 'The same model as the ModelSpec JSON AST, for tools.'],

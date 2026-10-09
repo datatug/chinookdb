@@ -11,7 +11,7 @@
     "check": "astro check",
     "validate": "node scripts/validate-data.mjs",
     "test:data": "node --test scripts/test-data.mjs",
-    "test:model": "node --test scripts/test-model.mjs",
+    "test:model": "node --test scripts/test-model.mjs scripts/test-modelspec.mjs",
     "test:tools": "node --test scripts/test-tools.mjs",
     "tools:install": "node scripts/install-tools.mjs --dir .tools/bin",
     "lint:model": "node scripts/run-tool.mjs modelspec lint --profile publish model",
