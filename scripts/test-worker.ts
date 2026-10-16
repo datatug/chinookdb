@@ -20,7 +20,7 @@ assert.match(await readFile(join(dist, '404.html'), 'utf8'), /Page not found/);
 const rules: { pattern: RegExp; headers: [string, string][] }[] = [];
 for (const line of (await readFile(join(dist, '_headers'), 'utf8')).split('\n')) {
   if (line.trim() === '' || line.trimStart().startsWith('#')) continue;
-  if (!/^\s/.test(line)) { rules.push({ pattern: new RegExp(`^${line.trim().replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace('*', '.*')}$`), headers: [] }); continue; }
+  if (!/^\s/.test(line)) { rules.push({ pattern: new RegExp(`^${line.trim().replace(/[.+?^${}()|[\]\\]/g, '\\$&').replaceAll('*', '.*')}$`), headers: [] }); continue; }
   const colon = line.indexOf(':');
   rules.at(-1)!.headers.push([line.slice(0, colon).trim().toLowerCase(), line.slice(colon + 1).trim()]);
 }
