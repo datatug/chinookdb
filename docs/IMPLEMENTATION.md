@@ -15,11 +15,15 @@ every git-tracked file under `model/` (no dotfiles) byte for byte at
 
 ## Delivery
 
-Cloudflare Workers Static Assets serves `dist/` behind a small Worker wrapper.
-The wrapper adds CORS and cache headers for `/data/**` and the files under
-`/model/` (not the `/model/` page), enforces the generated file MIME types
-(`.hcl` is served as `text/plain`), and prevents missing data URLs from
-becoming HTML fallbacks.
+Cloudflare Workers Static Assets serves `dist/`. `public/_headers` adds CORS
+and cache headers for `/data/**`, the files under `/model/` (not the `/model/`
+page), the embed script and the legacy discovery document, and sets the
+generated file MIME types (`.hcl` is served as `text/plain`). A miss gets
+`dist/404.html`. The Worker script runs only for `/ovdb` and `/ovdb/*`
+(`run_worker_first` in `wrangler.jsonc`): the legacy redirects to
+cloud.openvaultdb.com, with CORS preflight answers and a 410 for the old query
+endpoint. `scripts/test-worker.ts` checks the header rules against every
+published file and the redirects against the Worker.
 
 ## Meaning checks
 

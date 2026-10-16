@@ -198,9 +198,13 @@ unchanged at `/model/`, with a summary page at [/model/](/model/);
 
 ## Deployment
 
-The site is a Cloudflare Worker using current Workers Static Assets. The
+The site is static, served by Workers Static Assets from `dist/`. The
 `wrangler.jsonc` configuration targets the `chinookdb` Worker and the
-`chinookdb.com` custom domain.
+`chinookdb.com` custom domain. Its script (`src/worker.ts`) runs only for
+`/ovdb` and `/ovdb/*` (`run_worker_first`, see
+[OpenVaultDB connection](#openvaultdb-connection)); every other request,
+including a missing page, is answered by the static assets without running
+code, so it costs no Worker invocation.
 
 It deploys itself: `.github/workflows/deploy.yml` runs the checks of `ci.yml`,
 builds, and runs `pnpm exec wrangler deploy` on every push to `main` and on a
@@ -227,9 +231,13 @@ deployed Worker version with
 `pnpm exec wrangler deployments list --name chinookdb --json`. See
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the details.
 
-Data responses are served by the Worker with explicit content types, public
-cache headers, and permissive read-only CORS. Missing `/data/` files return a
-JSON 404 rather than the HTML site fallback.
+[`public/_headers`](public/_headers) gives the files under `/data/`, the
+files under `/model/` (not the `/model/` page), `/embed/datatug.js` and
+`/.well-known/openvaultdb` explicit content types (`.hcl` is `text/plain`),
+a five-minute public cache, `nosniff` and `Access-Control-Allow-Origin: *`.
+They are read-only: a simple cross-origin `GET` works, while `OPTIONS` and
+`POST` on them answer 405. A missing file answers 404 with the site's
+[404 page](src/pages/404.astro).
 
 ## OpenVaultDB connection
 
@@ -240,11 +248,17 @@ The service mounts a read-only SQLite copy of the pinned upstream fixture.
 Cloud Run deployment and the ChinookDB site cutover are coordinated; this
 checkout alone does not make the cloud endpoint live.
 
-Old `chinookdb.com/ovdb/` page URLs redirect to the cloud pages. The old
-`/.well-known/openvaultdb` document remains as a compatibility alias for
-clients that saved the old connection URL. Legacy `/ovdb/v1/` paths redirect to
-cloud `/v1/` paths, except the former static-JSON `GET /query?q=...` shape,
-which returns 410 because its query syntax is different.
+Old `chinookdb.com/ovdb/` page URLs redirect (307) to the cloud pages. The old
+`/.well-known/openvaultdb` document remains, as a static file
+([`public/.well-known/openvaultdb`](public/.well-known/openvaultdb)), as a
+compatibility alias for clients that saved the old connection URL. Legacy
+`/ovdb/v1/` paths redirect to cloud `/v1/` paths, except the former static-JSON
+`GET /query?q=...` shape, which returns 410 because its query syntax is
+different. These redirects are the only code the site runs: a 307 keeps a
+`POST` and its body, a browser preflights such a `POST` (the Worker answers
+`OPTIONS` with 204 and CORS headers, which static assets cannot) and follows a
+cross-origin redirect only when it carries CORS headers, and the 410 has a
+`Link` header; `_redirects` can do none of these.
 
 ## OVDB manifest
 

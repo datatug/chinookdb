@@ -1,0 +1,1 @@
+{"name":"Chinook OVDB compatibility discovery","protocol":"openvaultdb/0.1","authEnabled":false,"databases":[{"id":"chinook","url":"https://chinookdb.com/ovdb/dbs/chinook","apiUrl":"https://cloud.openvaultdb.com/v1/databases/chinook","capabilities":{"read":true,"query":true,"write":false}}]}

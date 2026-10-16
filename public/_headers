@@ -1,0 +1,55 @@
+# Response headers for the static files (Workers Static Assets applies this file; it is not served).
+# These requests never invoke the chinookdb Worker: wrangler.jsonc sends only /ovdb and /ovdb/* to it.
+# A header named in two matching rules is joined with a comma, so each Content-Type is set by exactly one rule.
+# scripts/test-worker.ts checks that every file under dist/data, dist/model and dist/embed gets the headers below.
+
+# The downloads: read-only CORS, a five-minute public cache, no MIME sniffing.
+/data/*
+  Access-Control-Allow-Origin: *
+  Access-Control-Allow-Methods: GET, HEAD, OPTIONS
+  Access-Control-Allow-Headers: Content-Type
+  Access-Control-Max-Age: 86400
+  Cache-Control: public, max-age=300, must-revalidate
+  X-Content-Type-Options: nosniff
+
+/data/*.sqlite
+  Content-Type: application/vnd.sqlite3
+/data/*.sql
+  Content-Type: application/sql
+/data/*.yaml
+  Content-Type: application/yaml; charset=utf-8
+/data/*.csv
+  Content-Type: text/csv; charset=utf-8
+/data/*.json
+  Content-Type: application/json; charset=utf-8
+
+# The published model files (not the /model/ page, which is /model/ and matches none of these).
+# HCL has no registered media type; text/plain lets browsers show it.
+/model/*.hcl
+  Content-Type: text/plain; charset=utf-8
+  Access-Control-Allow-Origin: *
+  Cache-Control: public, max-age=300, must-revalidate
+  X-Content-Type-Options: nosniff
+/model/*.json
+  Content-Type: application/json; charset=utf-8
+  Access-Control-Allow-Origin: *
+  Cache-Control: public, max-age=300, must-revalidate
+  X-Content-Type-Options: nosniff
+/model/*.yaml
+  Content-Type: application/yaml; charset=utf-8
+  Access-Control-Allow-Origin: *
+  Cache-Control: public, max-age=300, must-revalidate
+  X-Content-Type-Options: nosniff
+
+# The DataTug embed script, loaded by other sites.
+/embed/datatug.js
+  Content-Type: text/javascript; charset=utf-8
+  Access-Control-Allow-Origin: *
+  Cache-Control: public, max-age=300, must-revalidate
+  X-Content-Type-Options: nosniff
+
+# The legacy OVDB discovery document, kept for clients that saved the old connection URL.
+/.well-known/openvaultdb
+  Content-Type: application/json; charset=utf-8
+  Access-Control-Allow-Origin: *
+  Cache-Control: public, max-age=300
