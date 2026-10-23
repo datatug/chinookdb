@@ -505,13 +505,13 @@ their public JSON files directly. Downloads remain on chinookdb.com.
 ```html
 <script type="module" src="https://chinookdb.com/embed/datatug.js"></script>
 <datatug-grid connection="https://cloud.openvaultdb.com/ovdb/dbs/chinook">
-  <dtql-query>
+  <tugql-query>
 from: {name: Album}
 where: {op: ">=", left: {field: ArtistId}, right: {param: MinArtistID}}
 orderBy: [{field: AlbumId}]
 limit: 50
-  </dtql-query>
-  <dtql-param name="MinArtistID" value="1" type="number"></dtql-param>
+  </tugql-query>
+  <tugql-param name="MinArtistID" value="1" type="number"></tugql-param>
 </datatug-grid>
 ```
 
