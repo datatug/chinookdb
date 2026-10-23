@@ -461,4 +461,4 @@ concepts:
       inputs: [music-sales, population]
       dimensions: [billing-country]
       scale: 1000000
-      query: https://github.com/datatug/chinook-demo/blob/main/queries/sales/chinook-sales-per-capita.query.dtql
+      query: https://github.com/datatug/datatug-demo-project/blob/main/demo-project-1/queries/sales/chinook-sales-per-capita.query.tugql.yaml

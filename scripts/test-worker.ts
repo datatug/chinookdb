@@ -101,13 +101,13 @@ for (const [path, destination] of [
   assert.equal(response.status, 307, path);
   assert.equal(response.headers.get('Location'), destination);
 }
-const posted = await request('/ovdb/v1/databases/chinook/dtql', 'POST', '{}');
+const posted = await request('/ovdb/v1/databases/chinook/tugql', 'POST', '{}');
 assert.equal(posted.status, 307);
-assert.equal(posted.headers.get('Location'), 'https://cloud.openvaultdb.com/v1/databases/chinook/dtql');
-assert.equal((await request('/ovdb/v1/databases/chinook/dtql', 'OPTIONS')).status, 204);
+assert.equal(posted.headers.get('Location'), 'https://cloud.openvaultdb.com/v1/databases/chinook/tugql');
+assert.equal((await request('/ovdb/v1/databases/chinook/tugql', 'OPTIONS')).status, 204);
 assert.equal((await request('/ovdb/v1/databases/chinook/query?q=legacy')).status, 410);
 
-for (const path of ['/ovdb', '/ovdb/v1/databases/chinook/dtql']) assert.equal((await request(path)).headers.get('Access-Control-Allow-Origin'), '*', `${path} redirects with CORS, so a browser follows it`);
+for (const path of ['/ovdb', '/ovdb/v1/databases/chinook/tugql']) assert.equal((await request(path)).headers.get('Access-Control-Allow-Origin'), '*', `${path} redirects with CORS, so a browser follows it`);
 assert.equal((await request('/robots.txt')).status, 404, 'any other path is left to the static assets');
 
 console.log('ChinookDB static headers, model files and the legacy OVDB redirects pass.');
