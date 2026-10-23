@@ -495,11 +495,11 @@ record for the database (repository, commit, manifest path, canonical URL and
 MeaningGraph id `chinook`). The Directory then checks the addresses against the
 two registries and reads both repositories at the pins.
 
-## DataTug Embed and DTQL
+## DataTug Embed and TugQL
 
 Every `/tables/<Table>/` page loads the framework-neutral DataTug Embed bundle
 from `/embed/datatug.js`. The Album page demonstrates the hosted OVDB
-connection URL, DTQL YAML, and a bound parameter; the other table pages load
+connection URL, TugQL YAML, and a bound parameter; the other table pages load
 their public JSON files directly. Downloads remain on chinookdb.com.
 
 ```html
@@ -515,10 +515,10 @@ limit: 50
 </datatug-grid>
 ```
 
-The Go server advertises `dtql-yaml+json` in database metadata and accepts
-`POST /v1/databases/chinook/dtql` with JSON containing the YAML `query` and
+The Go server advertises `tugql-yaml+json` in database metadata and accepts
+`POST /v1/databases/chinook/tugql` with JSON containing the YAML `query` and
 separate `parameters` object. Scalar and scalar-array bindings are parsed as
-values before DTQL execution. The server remains read-only.
+values before TugQL execution. The server remains read-only.
 
 ## Attribution and licence
 
