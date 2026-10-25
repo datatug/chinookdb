@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22.23.4"
+  },
   "scripts": {
     "generate": "node scripts/generate-data.mjs && node scripts/generate-model.mjs",
     "dev": "pnpm generate && astro dev",
