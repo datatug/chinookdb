@@ -25,7 +25,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --config.minimumReleaseAge=0 --frozen-lockfile
       # modelspec, meaninggraph and ovdb at the release and SHA-256 pinned in scripts/tools.json: the installer refuses
       # an archive whose hash differs, and puts the binaries in .tools/bin.
       - name: Install the pinned modelspec, meaninggraph and ovdb
